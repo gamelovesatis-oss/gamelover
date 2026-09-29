@@ -42,7 +42,7 @@ export type RaceResult = {
   myFinishMs: number | null;
 };
 /** steer: telefon eğimi (-1..1), null ise eğim yok. hasItem: arayüzün eşya butonunu göstermesi için. */
-export type TouchInput = Omit<Input, "steer"> & { item: boolean; ability: boolean; steer: number | null; hasItem: boolean };
+export type TouchInput = Omit<Input, "steer"> & { item: boolean; ability: boolean; steer: number | null; hasItem: boolean; hideRank?: boolean };
 
 export const POINTS = [10, 8, 6, 5, 4, 3, 2, 1];
 const ITEMS: Item[] = ["turbo", "roket", "yag", "kalkan", "simsek"];
@@ -413,7 +413,7 @@ export function runRace(opts: {
 
     // Canlı sıralama listesi
     g.font = "12px sans-serif";
-    rank.slice(0, 8).forEach((c, i) => {
+    if (!touch.current.hideRank) rank.slice(0, 8).forEach((c, i) => {
       const y = 104 + i * 20;
       g.fillStyle = c === me ? "rgba(255,255,255,0.18)" : "rgba(5,4,11,0.55)";
       g.fillRect(14, y - 14, 170, 18);

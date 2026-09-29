@@ -4,7 +4,8 @@ import { AnimatePresence, motion } from "framer-motion";
 import { Bot, Check, Copy, Crown, Flag, Loader2, Maximize2, Minimize2, Music, Users, Volume2, VolumeX, Wifi, WifiOff, X, Zap } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { GameProps } from "@/games/hooks";
-import { raceAudio } from "@/games/racing/audio";
+import { raceAudio, type MusicSource } from "@/games/racing/audio";
+import { YouTubeDock } from "@/games/racing/YouTubeDock";
 import { CAR_TYPES, LAP_OPTIONS, MODE_NAME, TEAM_COLOR, TEAM_NAME, type CarType, type Mode, type Team } from "@/games/racing/engine";
 import { enterFullscreenLandscape, exitFullscreen } from "@/games/racing/fullscreen";
 import { RaceNet, type Player } from "@/games/racing/net";
@@ -40,6 +41,7 @@ export default function NeonRacing({ onScore, onGameOver }: GameProps) {
   const [dims, setDims] = useState({ w: 1280, h: 800 });
   const [muted, setMuted] = useState(false);
   const [confirmQuit, setConfirmQuit] = useState(false);
+  const [musicSrc, setMusicSrc] = useState<MusicSource>("phonk");
   const netRef = useRef<RaceNet | null>(null);
   const idRef = useRef(newId());
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -55,6 +57,7 @@ export default function NeonRacing({ onScore, onGameOver }: GameProps) {
     setIsTouch(coarse);
     if (coarse) setImmersive(true);
     setMuted(raceAudio().muted);
+    setMusicSrc(raceAudio().source);
     const onResize = () => setDims({ w: window.innerWidth, h: window.innerHeight });
     onResize();
     window.addEventListener("resize", onResize);
@@ -156,6 +159,10 @@ export default function NeonRacing({ onScore, onGameOver }: GameProps) {
     list.sort(() => Math.random() - 0.5); // ızgarayı karıştır
     net.sendAll("start", { roster: list, laps, mode });
   }
+
+  useEffect(() => {
+    touch.current.hideRank = isTouch && musicSrc === "youtube";
+  }, [isTouch, musicSrc]);
 
   // Yarışı çalıştır. Sonuç ekranında da arkada sürer: oda sahibi botları yönetmeye devam eder.
   useEffect(() => {
@@ -350,7 +357,7 @@ export default function NeonRacing({ onScore, onGameOver }: GameProps) {
 
               <CarPicker value={type} onChange={(v) => change({ type: v })} compact />
 
-              <MusicPicker />
+              <MusicPicker source={musicSrc} onSource={setMusicSrc} />
 
               {isHost ? (
                 <div className="flex flex-wrap items-center gap-3">
@@ -377,6 +384,15 @@ export default function NeonRacing({ onScore, onGameOver }: GameProps) {
           )}
         </AnimatePresence>
       </div>
+
+      {musicSrc === "youtube" && phase !== "menu" && phase !== "connecting" && (
+        <YouTubeDock
+          muted={muted}
+          className={cn(
+            racing ? (isTouch ? "absolute left-2 top-2" : "absolute bottom-3 left-3") : "mx-auto my-4",
+          )}
+        />
+      )}
 
       {racing && (
         <div
@@ -447,8 +463,8 @@ export default function NeonRacing({ onScore, onGameOver }: GameProps) {
   );
 }
 
-/** Müzik seçimi: varsayılan drift phonk ya da oyuncunun cihazındaki kendi şarkısı. */
-function MusicPicker() {
+/** Müzik seçimi: üretilen drift phonk, YouTube'dan resmi klipler ya da oyuncunun kendi dosyası. */
+function MusicPicker({ source, onSource }: { source: MusicSource; onSource: (s: MusicSource) => void }) {
   const [current, setCurrent] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const input = useRef<HTMLInputElement>(null);
@@ -459,19 +475,44 @@ function MusicPicker() {
       .then((n) => setCurrent(n));
   }, []);
 
-  async function pick(file: File | null) {
+  function choose(s: MusicSource) {
+    raceAudio().setSource(s);
+    onSource(s);
+  }
+
+  async function pick(file: File) {
     setBusy(true);
     await raceAudio().setCustom(file);
     setCurrent(raceAudio().customName);
+    choose("custom");
     setBusy(false);
   }
 
+  const opt = (s: MusicSource, label: string, sub: string, onClick?: () => void) => (
+    <button
+      onClick={onClick ?? (() => choose(s))}
+      disabled={busy}
+      className={cn("rounded-xl border-2 px-3 py-2 text-left text-sm transition", source === s ? "border-neon-pink bg-neon-pink/10 text-white" : "border-white/10 text-slate-400")}
+    >
+      <div className="truncate font-bold">{label}</div>
+      <div className="truncate text-[11px] opacity-70">{sub}</div>
+    </button>
+  );
+
   return (
-    <div className="flex flex-wrap items-center gap-3 rounded-2xl border-2 border-white/10 p-3">
-      <Music className="h-5 w-5 shrink-0 text-neon-pink" />
-      <div className="min-w-0 flex-1">
-        <div className="text-xs uppercase tracking-wider text-slate-400">Yarış müziği</div>
-        <div className="truncate font-semibold text-white">{current ? `🎵 ${current}` : "🔥 Drift Phonk (varsayılan)"}</div>
+    <div className="rounded-2xl border-2 border-white/10 p-3">
+      <div className="mb-2 flex items-center gap-2 text-xs uppercase tracking-wider text-slate-400">
+        <Music className="h-4 w-4 text-neon-pink" /> Yarış müziği
+      </div>
+      <div className="grid gap-2 sm:grid-cols-3">
+        {opt("youtube", "🎬 Tokyo Drift + We Own It", "YouTube resmi klipler")}
+        {opt("phonk", "🔥 Drift Phonk", "Oyuna özel")}
+        {opt(
+          "custom",
+          current ? `🎵 ${current}` : "📁 Kendi şarkın",
+          current ? "Değiştirmek için tekrar dokun" : "Cihazından seç",
+          () => (current && source !== "custom" ? choose("custom") : input.current?.click()),
+        )}
       </div>
       <input
         ref={input}
@@ -484,15 +525,7 @@ function MusicPicker() {
           e.target.value = "";
         }}
       />
-      <button onClick={() => input.current?.click()} disabled={busy} className="btn-ghost px-3 py-2 text-xs">
-        {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Kendi şarkını seç"}
-      </button>
-      {current && (
-        <button onClick={() => void pick(null)} disabled={busy} className="text-xs text-slate-400 underline">
-          Varsayılana dön
-        </button>
-      )}
-      <p className="w-full text-[11px] text-slate-500">Seçtiğin şarkı sadece senin cihazında çalar, siteye yüklenmez.</p>
+      {source === "youtube" && <p className="mt-2 text-[11px] text-slate-500">Klipler YouTube oynatıcısında çalar; oynatıcı ekranın köşesinde görünür kalır.</p>}
     </div>
   );
 }

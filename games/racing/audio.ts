@@ -31,6 +31,7 @@ const KICKS = [
 ];
 
 // ---------- Oyuncunun kendi şarkısı (cihazda IndexedDB'de saklanır, siteye yüklenmez) ----------
+export type MusicSource = "phonk" | "custom" | "youtube";
 const DB = "gl-racing";
 function idb<T>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRequest): Promise<T | undefined> {
   return new Promise((resolve) => {
@@ -85,12 +86,26 @@ class RaceAudio {
   private custom: HTMLAudioElement | null = null;
   private customUrl: string | null = null;
   customName: string | null = null;
+  /** Müzik kaynağı: üretilen phonk, oyuncunun kendi dosyası ya da YouTube (oynatıcı ayrı bileşende). */
+  source: MusicSource = "phonk";
   muted = false;
 
   constructor() {
     try {
       this.muted = localStorage.getItem("gl-muted") === "1";
+      const s = localStorage.getItem("gl-music-src") as MusicSource | null;
+      if (s === "phonk" || s === "custom" || s === "youtube") this.source = s;
     } catch {}
+  }
+
+  setSource(s: MusicSource) {
+    const playing = this.timer !== null || (this.custom != null && !this.custom.paused);
+    this.stopMusic();
+    this.source = s;
+    try {
+      localStorage.setItem("gl-music-src", s);
+    } catch {}
+    if (playing) this.startMusic();
   }
 
   /** Kullanıcı dokunuşu içinde çağrılmalı (tarayıcı kuralı). */
@@ -271,7 +286,8 @@ class RaceAudio {
 
   // ---------- Müzik ----------
   startMusic() {
-    if (this.custom) {
+    if (this.source === "youtube") return; // YouTube oynatıcısı kendisi çalar
+    if (this.source === "custom" && this.custom) {
       this.custom.currentTime = 0;
       void this.custom.play().catch(() => {});
       return;
