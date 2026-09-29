@@ -420,7 +420,7 @@ export function runRace(opts: {
     if (!audioOff) sfx.setDrift(started && !ended ? skid : 0);
 
     // ---------- Çizim ----------
-    scene.update({ now, dt, cars, boxesAt, missiles, oils, parts, countdownMs: Math.max(0, startAt - now) });
+    scene.update({ now, dt, cars, boxesAt, missiles, oils, parts, countdownMs: Math.max(0, startAt - now), sinceStartMs: now - startAt });
     g.clearRect(0, 0, VIEW_W, VIEW_H);
 
     drawMinimap(g, track, cars, meId, !hq);

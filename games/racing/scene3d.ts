@@ -6,7 +6,11 @@ import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
-import { colorOf, type Car, type CarType, type Missile, type Oil } from "@/games/racing/engine";
+import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
+import { buildCarModel, type CarRig } from "@/games/racing/carModel";
+import { SkidMarks, TireSmoke } from "@/games/racing/effects";
+import { FlagStarter } from "@/games/racing/starter";
+import { colorOf, type Car, type Missile, type Oil } from "@/games/racing/engine";
 import type { Particle } from "@/games/racing/render";
 import { TRACK_W, WORLD_H, WORLD_W, dirAt, nearest, type Track } from "@/games/racing/track";
 
@@ -150,125 +154,28 @@ function labelSprite(text: string, color: string, bold: boolean) {
   return s;
 }
 
-// ---------- Araç modeli ----------
-type CarMesh = { group: THREE.Group; body: THREE.Group; shield: THREE.Mesh; flames: THREE.Group; glow: THREE.Mesh; wheels: THREE.Mesh[] };
-
-function buildCar(type: CarType, color: string, name: string, isMe: boolean, hq: boolean): CarMesh {
-  const group = new THREE.Group();
-  const body = new THREE.Group();
-  group.add(body);
-  const paint = new THREE.MeshStandardMaterial({ color, metalness: 0.65, roughness: 0.28, emissive: color, emissiveIntensity: 0.12 });
-  const dark = new THREE.MeshStandardMaterial({ color: "#0b0f1f", metalness: 0.9, roughness: 0.15 });
-  const black = new THREE.MeshStandardMaterial({ color: "#0a0a0f", roughness: 0.8 });
-  const white = new THREE.MeshStandardMaterial({ color: "#f8fafc", metalness: 0.4, roughness: 0.3 });
-
-  const dims = type === "tank" ? { l: 40, h: 12, w: 25 } : type === "avci" ? { l: 42, h: 8, w: 20 } : { l: 40, h: 9, w: 21 };
-  const chassis = new THREE.Mesh(new THREE.BoxGeometry(dims.l, dims.h, dims.w), paint);
-  chassis.position.y = 4 + dims.h / 2;
-  body.add(chassis);
-
-  // Yan şerit (telefonda atlanır)
-  if (hq) {
-    const stripe = new THREE.Mesh(new THREE.BoxGeometry(dims.l * 0.9, 1.6, dims.w + 0.4), white);
-    stripe.position.y = 4 + dims.h * 0.55;
-    body.add(stripe);
-  }
-
-  if (type === "avci") {
-    // Kama burun
-    const nose = new THREE.Mesh(new THREE.ConeGeometry(dims.w / 2, 16, 4), paint);
-    nose.rotation.z = -Math.PI / 2;
-    nose.rotation.x = Math.PI / 4;
-    nose.scale.set(1, 1, 0.45);
-    nose.position.set(dims.l / 2 + 7, 4 + dims.h / 2, 0);
-    body.add(nose);
-  }
-
-  const cabin = new THREE.Mesh(new THREE.BoxGeometry(type === "tank" ? 20 : 16, type === "tank" ? 9 : 7, dims.w - 4), dark);
-  cabin.position.set(type === "avci" ? -4 : -2, 4 + dims.h + (type === "tank" ? 4.5 : 3.5), 0);
-  body.add(cabin);
-
-  // Spoiler
-  const wing = new THREE.Mesh(new THREE.BoxGeometry(5, 1.5, dims.w + 4), paint);
-  wing.position.set(-dims.l / 2 + 2, 4 + dims.h + 7, 0);
-  body.add(wing);
-  for (const z of hq ? [-dims.w / 2 + 3, dims.w / 2 - 3] : []) {
-    const post = new THREE.Mesh(new THREE.BoxGeometry(2, 7, 1.5), black);
-    post.position.set(-dims.l / 2 + 2, 4 + dims.h + 3, z);
-    body.add(post);
-  }
-
-  // Farlar ve stoplar
-  const headMat = new THREE.MeshBasicMaterial({ color: "#e0f2fe" });
-  const tailMat = new THREE.MeshBasicMaterial({ color: "#ff2d55" });
-  for (const z of [-dims.w / 2 + 4, dims.w / 2 - 4]) {
-    if (hq) {
-      const hl = new THREE.Mesh(new THREE.BoxGeometry(1, 2.5, 4), headMat);
-      hl.position.set(dims.l / 2 + 0.5, 4 + dims.h * 0.6, z);
-      body.add(hl);
-    }
-    const tl = new THREE.Mesh(new THREE.BoxGeometry(1, 2.5, 5), tailMat);
-    tl.position.set(-dims.l / 2 - 0.5, 4 + dims.h * 0.6, z);
-    body.add(tl);
-  }
-
-  // Tekerlekler
-  const wheels: THREE.Mesh[] = [];
-  const wheelGeo = new THREE.CylinderGeometry(5, 5, 4.5, 18);
-  for (const [x, z] of [
-    [dims.l / 2 - 8, dims.w / 2],
-    [dims.l / 2 - 8, -dims.w / 2],
-    [-dims.l / 2 + 8, dims.w / 2],
-    [-dims.l / 2 + 8, -dims.w / 2],
-  ]) {
-    const wheel = new THREE.Mesh(wheelGeo, black);
-    wheel.rotation.x = Math.PI / 2;
-    wheel.position.set(x, 5, z);
-    if (hq) wheel.add(new THREE.Mesh(new THREE.CylinderGeometry(2.6, 2.6, 4.7, 8), new THREE.MeshBasicMaterial({ color })));
-    body.add(wheel);
-    wheels.push(wheel);
-  }
-
-  // Alt neon
-  const glow = new THREE.Mesh(
-    new THREE.PlaneGeometry(dims.l + 34, dims.w + 30),
-    new THREE.MeshBasicMaterial({ color, map: glowTex(), transparent: true, opacity: 0.7, blending: THREE.AdditiveBlending, depthWrite: false }),
-  );
-  glow.rotation.x = -Math.PI / 2;
-  glow.position.y = 0.8;
-  group.add(glow);
-
-  // Turbo alevleri
-  const flames = new THREE.Group();
-  const flameMat = new THREE.MeshBasicMaterial({ color: "#fbbf24", transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false });
-  for (const z of [-5, 5]) {
-    const f = new THREE.Mesh(new THREE.ConeGeometry(3.5, 20, 10), flameMat);
-    f.rotation.z = Math.PI / 2;
-    f.position.set(-dims.l / 2 - 10, 7, z);
-    flames.add(f);
-  }
-  flames.visible = false;
-  body.add(flames);
-
-  // Kalkan
-  const shield = new THREE.Mesh(
-    new THREE.SphereGeometry(34, 24, 16),
-    new THREE.MeshBasicMaterial({ color: "#22d3ee", transparent: true, opacity: 0.22, blending: THREE.AdditiveBlending, depthWrite: false }),
-  );
-  shield.position.y = 10;
-  shield.visible = false;
-  group.add(shield);
-
-  group.add(labelSprite(name, isMe ? "#ffffff" : color, isMe));
-  return { group, body, shield, flames, glow, wheels };
-}
+type CarView = CarRig & {
+  label: THREE.Sprite;
+  prevFwd: number;
+  prevA: number;
+  pitch: number;
+  roll: number;
+  steer: number;
+  bounce: number;
+};
 
 export class Scene3D {
   private renderer: THREE.WebGLRenderer;
   private scene = new THREE.Scene();
   private camera = new THREE.PerspectiveCamera(68, 16 / 10, 1, 6000);
   private composer: EffectComposer | null = null;
-  private cars = new Map<string, CarMesh>();
+  private cars = new Map<string, CarView>();
+  private smoke: TireSmoke;
+  private skids: SkidMarks;
+  private starter: FlagStarter;
+  private shake = 0;
+  private lastSpin = 0;
+  private frame = 0;
   private missiles = new Map<string, THREE.Object3D>();
   private oils = new Map<string, THREE.Mesh>();
   private boxes: THREE.Mesh[] = [];
@@ -306,12 +213,27 @@ export class Scene3D {
     this.scene.add(sun);
     this.scene.add(new THREE.AmbientLight("#ffffff", 0.25));
 
+    // Gerçekçi yansımalar için ortam haritası (boya, cam, krom)
+    const pmrem = new THREE.PMREMGenerator(this.renderer);
+    this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    this.scene.environmentIntensity = 0.55;
+    pmrem.dispose();
+
     this.buildWorld();
     for (const c of cars) {
-      const m = buildCar(c.type, colorOf(c), c.name, c.id === meId, hq);
-      this.scene.add(m.group);
-      this.cars.set(c.id, m);
+      const isMe = c.id === meId;
+      const rig = buildCarModel(c.type, colorOf(c), { hq, beam: isMe || hq });
+      const label = labelSprite(c.name, isMe ? "#ffffff" : colorOf(c), isMe);
+      label.position.y = 34;
+      rig.group.add(label);
+      this.scene.add(rig.group);
+      this.cars.set(c.id, { ...rig, label, prevFwd: 0, prevA: c.a, pitch: 0, roll: 0, steer: 0, bounce: 0 });
     }
+    this.smoke = new TireSmoke(hq ? 900 : 350);
+    this.skids = new SkidMarks(hq ? 2400 : 900);
+    this.scene.add(this.skids.mesh, this.smoke.points);
+    this.starter = new FlagStarter(track, hq);
+    this.scene.add(this.starter.group);
 
     const pg = new THREE.BufferGeometry();
     pg.setAttribute("position", new THREE.BufferAttribute(this.partPos, 3));
@@ -346,7 +268,7 @@ export class Scene3D {
     gt.repeat.set(60, 60);
     const ground = new THREE.Mesh(
       new THREE.PlaneGeometry(9000, 9000),
-      this.hq ? new THREE.MeshStandardMaterial({ map: gt, roughness: 0.95 }) : new THREE.MeshLambertMaterial({ map: gt }),
+      this.hq ? new THREE.MeshStandardMaterial({ map: gt, roughness: 0.95, envMapIntensity: 0.1 }) : new THREE.MeshLambertMaterial({ map: gt }),
     );
     ground.rotation.x = -Math.PI / 2;
     ground.position.set(WORLD_W / 2, -0.5, WORLD_H / 2);
@@ -391,7 +313,7 @@ export class Scene3D {
     const road = new THREE.Mesh(
       strip(TRACK_W / 2, -TRACK_W / 2, 0.2, 0.2, undefined, true),
       this.hq
-        ? new THREE.MeshStandardMaterial({ map: asphaltTex(), roughness: 0.85, metalness: 0.1, side: THREE.DoubleSide })
+        ? new THREE.MeshStandardMaterial({ map: asphaltTex(), roughness: 0.75, metalness: 0.1, side: THREE.DoubleSide, envMapIntensity: 0.35 })
         : new THREE.MeshLambertMaterial({ map: asphaltTex(), side: THREE.DoubleSide }),
     );
     this.scene.add(road);
@@ -534,9 +456,11 @@ export class Scene3D {
     return v;
   }
 
-  update(s: { now: number; dt: number; cars: Car[]; boxesAt: number[]; missiles: Missile[]; oils: Oil[]; parts: Particle[]; countdownMs: number }) {
+  update(s: { now: number; dt: number; cars: Car[]; boxesAt: number[]; missiles: Missile[]; oils: Oil[]; parts: Particle[]; countdownMs: number; sinceStartMs: number }) {
     const { now, dt } = s;
-    // Araçlar
+    this.frame++;
+    // Araçlar: süspansiyon, direksiyon, tekerlek dönüşü, fren lambası, duman ve iz
+    const me0 = s.cars.find((c) => c.id === this.meId)!;
     for (const c of s.cars) {
       const m = this.cars.get(c.id);
       if (!m) continue;
@@ -545,16 +469,57 @@ export class Scene3D {
       const fx = Math.cos(c.a),
         fy = Math.sin(c.a);
       const fwd = c.vx * fx + c.vy * fy;
-      const lat = -c.vx * fy + c.vy * fx;
-      m.body.rotation.x = THREE.MathUtils.lerp(m.body.rotation.x, Math.max(-0.12, Math.min(0.12, lat * 0.03)), 0.2);
-      m.body.position.y = now < c.spinUntil ? Math.abs(Math.sin(now / 90)) * 6 : 0;
-      for (const w of m.wheels) w.rotation.y += fwd * 0.12 * dt;
+      const speed = Math.hypot(c.vx, c.vy);
+      const accel = (fwd - m.prevFwd) / Math.max(0.2, dt);
+      let yaw = c.a - m.prevA;
+      while (yaw > Math.PI) yaw -= Math.PI * 2;
+      while (yaw < -Math.PI) yaw += Math.PI * 2;
+      const yawRate = yaw / Math.max(0.2, dt);
+      m.prevFwd = fwd;
+      m.prevA = c.a;
+      const spinning = now < c.spinUntil;
+
+      // Süspansiyon: gazda arka çöker (burun kalkar), frende burun dalar; virajda dışa yatar
+      const pitchT = Math.max(-0.07, Math.min(0.07, accel * 0.35));
+      const rollT = Math.max(-0.09, Math.min(0.09, yawRate * fwd * 0.12));
+      m.pitch += (pitchT - m.pitch) * Math.min(1, 0.12 * dt);
+      m.roll += (rollT - m.roll) * Math.min(1, 0.15 * dt);
+      m.bounce = spinning ? Math.abs(Math.sin(now / 90)) * 5 : Math.sin(now / 70 + c.x * 0.01) * Math.min(0.35, speed * 0.04);
+      m.body.rotation.z = m.pitch;
+      m.body.rotation.x = m.roll;
+      m.body.position.y = m.bounce;
+
+      // Ön tekerlekler direksiyonla döner, tüm tekerlekler hızla döner
+      const steerT = spinning ? 0 : Math.max(-0.5, Math.min(0.5, -yawRate * 9));
+      m.steer += (steerT - m.steer) * Math.min(1, 0.3 * dt);
+      for (const p of m.frontPivots) p.rotation.y = m.steer;
+      for (const w of m.spinners) w.rotation.z -= (fwd / m.wheelR) * dt;
+
+      // Fren lambası
+      const braking = accel < -0.06 || (c.drift > 2 && fwd > 3);
+      m.brakeMat.emissiveIntensity += ((braking ? 4 : 1) - m.brakeMat.emissiveIntensity) * 0.3;
+
       m.shield.visible = now < c.shieldUntil;
       if (m.shield.visible) m.shield.scale.setScalar(1 + Math.sin(now / 90) * 0.04);
       m.flames.visible = now < c.boostUntil;
-      if (m.flames.visible) m.flames.scale.set(0.8 + Math.random() * 0.6, 1, 1);
-      (m.glow.material as THREE.MeshBasicMaterial).opacity = now < c.slowUntil ? 0.2 + Math.random() * 0.5 : 0.7;
+      if (m.flames.visible) m.flames.scale.set(0.7 + Math.random() * 0.7, 1, 1);
+      (m.glow.material as THREE.MeshBasicMaterial).opacity = now < c.slowUntil ? 0.1 + Math.random() * 0.4 : 0.32;
+
+      // Drift: arka tekerleklerden duman ve yolda iz
+      const sliding = (c.drift > 1.3 && speed > 3.5) || spinning;
+      const near = Math.abs(c.x - me0.x) + Math.abs(c.y - me0.y) < (this.hq ? 1800 : 900);
+      if (sliding && near && (this.hq || this.frame % 2 === 0)) {
+        const strength = spinning ? 1.4 : Math.min(1.6, (c.drift - 1.1) / 2);
+        for (const side of [-1, 1]) {
+          const wx = c.x + fx * m.rearAxle - fy * side * m.halfTrack;
+          const wz = c.y + fy * m.rearAxle + fx * side * m.halfTrack;
+          this.smoke.emit(wx, wz, c.vx, c.vy, strength);
+          this.skids.add(wx, wz, c.a);
+        }
+      }
     }
+    this.smoke.update(dt);
+    this.starter.update(s.sinceStartMs, dt, now);
 
     // Kutular
     this.boxes.forEach((b, i) => {
@@ -649,7 +614,15 @@ export class Scene3D {
     const fx = Math.cos(this.camAngle),
       fy = Math.sin(this.camAngle);
     this.camPos.set(me.x - Math.cos(ang) * back, up, me.y - Math.sin(ang) * back);
-    this.camLook.set(me.x + fx * 70, 12, me.y + fy * 70);
+    this.camLook.set(me.x + fx * 45, 7, me.y + fy * 45);
+    if (me.spinUntil > this.lastSpin && now < me.spinUntil) this.shake = 1;
+    this.lastSpin = me.spinUntil;
+    if (this.shake > 0.01) {
+      this.camPos.x += (Math.random() - 0.5) * 6 * this.shake;
+      this.camPos.y += (Math.random() - 0.5) * 4 * this.shake;
+      this.camPos.z += (Math.random() - 0.5) * 6 * this.shake;
+      this.shake *= Math.pow(0.9, dt);
+    }
     this.camera.position.copy(this.camPos);
     this.camera.lookAt(this.camLook);
     const speed = Math.hypot(me.vx, me.vy);
