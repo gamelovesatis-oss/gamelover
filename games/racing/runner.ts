@@ -398,7 +398,11 @@ export function runRace(opts: {
       lastCount = 0;
       sfx.beep(true);
     }
-    sfx.setEngine(me.quitAt != null ? 0 : Math.min(1, Math.hypot(me.vx, me.vy) / 11), now < me.boostUntil);
+    const mySpeed = Math.hypot(me.vx, me.vy);
+    sfx.setEngine(me.quitAt != null ? 0 : Math.min(1, mySpeed / 11), now < me.boostUntil);
+    // Lastik ötmesi: yan kayarken veya savrulurken
+    const skid = now < me.spinUntil ? 1 : mySpeed > 3.5 ? Math.min(1, Math.max(0, (me.drift - 1.1) / 2.5)) : 0;
+    sfx.setDrift(started && !ended ? skid : 0);
 
     // ---------- Çizim ----------
     scene.update({ now, dt, cars, boxesAt, missiles, oils, parts, countdownMs: Math.max(0, startAt - now) });

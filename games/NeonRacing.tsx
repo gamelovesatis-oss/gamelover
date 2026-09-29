@@ -1,7 +1,7 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
-import { Bot, Check, Copy, Crown, Flag, Loader2, Maximize2, Minimize2, Users, Volume2, VolumeX, Wifi, WifiOff, X, Zap } from "lucide-react";
+import { Bot, Check, Copy, Crown, Flag, Loader2, Maximize2, Minimize2, Music, Users, Volume2, VolumeX, Wifi, WifiOff, X, Zap } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { GameProps } from "@/games/hooks";
 import { raceAudio } from "@/games/racing/audio";
@@ -350,6 +350,8 @@ export default function NeonRacing({ onScore, onGameOver }: GameProps) {
 
               <CarPicker value={type} onChange={(v) => change({ type: v })} compact />
 
+              <MusicPicker />
+
               {isHost ? (
                 <div className="flex flex-wrap items-center gap-3">
                   <label className="flex items-center gap-2 text-sm text-slate-300">
@@ -441,6 +443,56 @@ export default function NeonRacing({ onScore, onGameOver }: GameProps) {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/** Müzik seçimi: varsayılan drift phonk ya da oyuncunun cihazındaki kendi şarkısı. */
+function MusicPicker() {
+  const [current, setCurrent] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const input = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    raceAudio()
+      .loadSaved()
+      .then((n) => setCurrent(n));
+  }, []);
+
+  async function pick(file: File | null) {
+    setBusy(true);
+    await raceAudio().setCustom(file);
+    setCurrent(raceAudio().customName);
+    setBusy(false);
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-3 rounded-2xl border-2 border-white/10 p-3">
+      <Music className="h-5 w-5 shrink-0 text-neon-pink" />
+      <div className="min-w-0 flex-1">
+        <div className="text-xs uppercase tracking-wider text-slate-400">Yarış müziği</div>
+        <div className="truncate font-semibold text-white">{current ? `🎵 ${current}` : "🔥 Drift Phonk (varsayılan)"}</div>
+      </div>
+      <input
+        ref={input}
+        type="file"
+        accept="audio/*"
+        className="hidden"
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          if (f) void pick(f);
+          e.target.value = "";
+        }}
+      />
+      <button onClick={() => input.current?.click()} disabled={busy} className="btn-ghost px-3 py-2 text-xs">
+        {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Kendi şarkını seç"}
+      </button>
+      {current && (
+        <button onClick={() => void pick(null)} disabled={busy} className="text-xs text-slate-400 underline">
+          Varsayılana dön
+        </button>
+      )}
+      <p className="w-full text-[11px] text-slate-500">Seçtiğin şarkı sadece senin cihazında çalar, siteye yüklenmez.</p>
     </div>
   );
 }
