@@ -1,4 +1,4 @@
-import { TRACK_W, dirAt, nearest, type Track } from "@/games/racing/track";
+import { dirAt, nearest, type Track } from "@/games/racing/track";
 
 /** Yarış ayarları — tur sayısı oda sahibi tarafından yarış başında belirlenir. */
 export type Mode = "herkes" | "takim" | "drift";
@@ -72,7 +72,8 @@ export type Car = {
 export type Missile = { id: string; owner: string; team: Team; x: number; y: number; a: number; target: string | null; until: number };
 export type Oil = { id: string; owner: string; team: Team; x: number; y: number; until: number };
 /** steer: -1..1 analog yön (telefonu eğerek sürüş); verilirse left/right yerine kullanılır. */
-export type Input = { up: boolean; down: boolean; left: boolean; right: boolean; steer?: number };
+/** assist: sürüş yardımı (araç yolu kendisi takip etmeye çalışır, tutuş artar, duvarda kayar). */
+export type Input = { up: boolean; down: boolean; left: boolean; right: boolean; steer?: number; assist?: boolean };
 
 export const uid = () => Math.random().toString(36).slice(2, 10);
 
@@ -130,10 +131,26 @@ export function ranking(t: Track, cars: Car[]) {
 export function stepCar(t: Track, c: Car, inp: Input, now: number, dt: number, raceMs: number) {
   const spec = CAR_TYPES[c.type];
   const { idx, dist } = nearest(t, c.x, c.y, c.idx);
-  const offroad = dist > TRACK_W / 2;
+  const offroad = dist > t.width / 2;
   const driftMode = race.mode === "drift";
-  const steer = inp.steer ?? (inp.left ? -1 : 0) + (inp.right ? 1 : 0);
+  let steer = inp.steer ?? (inp.left ? -1 : 0) + (inp.right ? 1 : 0);
   const spinning = now < c.spinUntil;
+  const oldSpeed = c.vx * Math.cos(c.a) + c.vy * Math.sin(c.a);
+
+  // Sürüş yardımı: ileriki yol noktasına doğru otomatik direksiyon; oyuncu ne kadar çok
+  // direksiyon verirse yardım o kadar azalır (sollama/dönüş serbest).
+  let assistBrake = false;
+  if (inp.assist && !spinning && oldSpeed > 2 && !driftMode) {
+    const n = t.pts.length;
+    const p = t.pts[(idx + Math.round(8 + oldSpeed * 1.5)) % n];
+    let diff = Math.atan2(p.y - c.y, p.x - c.x) - c.a;
+    while (diff > Math.PI) diff -= Math.PI * 2;
+    while (diff < -Math.PI) diff += Math.PI * 2;
+    const auto = Math.max(-1, Math.min(1, diff * 2.6));
+    steer = Math.max(-1, Math.min(1, steer + auto * (1 - Math.min(1, Math.abs(steer))) * 0.9));
+    // Keskin viraj yaklaşıyorsa otomatik yavaşla
+    assistBrake = Math.abs(diff) > 0.42 && oldSpeed > 6.2;
+  }
 
   // 1) Önce yön değişir; hız dünyada sabit kalır → yeni yöne göre yana kayma oluşur.
   const oldFwd = c.vx * Math.cos(c.a) + c.vy * Math.sin(c.a);
@@ -153,7 +170,8 @@ export function stepCar(t: Track, c: Car, inp: Input, now: number, dt: number, r
     if (now < c.slowUntil) max *= 0.55;
     if (offroad) max *= 0.5;
     const handbrake = driftMode && inp.down && fwd > 4; // drift modunda hızlıyken FREN = el freni
-    if (inp.up) fwd += spec.acc * (now < c.boostUntil ? 1.8 : 1) * dt;
+    if (inp.up && assistBrake) fwd -= 0.14 * dt;
+    else if (inp.up) fwd += spec.acc * (now < c.boostUntil ? 1.8 : 1) * dt;
     else if (handbrake) fwd -= 0.08 * dt;
     else if (inp.down) fwd -= (fwd > 0 ? 0.35 : 0.12) * dt;
     else fwd *= Math.pow(0.985, dt);
@@ -161,6 +179,7 @@ export function stepCar(t: Track, c: Car, inp: Input, now: number, dt: number, r
     fwd = Math.max(-3, fwd);
     // 2) Lastik tutuşu yana kaymayı söndürür (drift modunda daha az)
     let grip = spec.grip - (Math.abs(steer) > 0.4 && Math.abs(fwd) > 6 ? 0.04 : 0);
+    if (inp.assist) grip += 0.04; // yardımda araç daha az kayar
     if (driftMode) grip = handbrake ? 0.965 : grip + 0.02;
     lat *= Math.pow(Math.min(0.98, grip), dt);
   }
@@ -171,7 +190,7 @@ export function stepCar(t: Track, c: Car, inp: Input, now: number, dt: number, r
   c.y += c.vy * dt;
 
   // Duvar: pistin çok dışına çıkmayı engelle
-  const limit = TRACK_W / 2 + 55;
+  const limit = t.wall;
   const n2 = nearest(t, c.x, c.y, idx);
   const hitWall = n2.dist > limit;
   if (hitWall) {
@@ -181,17 +200,28 @@ export function stepCar(t: Track, c: Car, inp: Input, now: number, dt: number, r
     c.x = p.x + ox * limit;
     c.y = p.y + oy * limit;
     const out = c.vx * ox + c.vy * oy;
+    // Yardım açıkken duvar boyunca kayar; kapalıyken seker
+    const bounce = inp.assist ? 1.05 : 1.6;
     if (out > 0) {
-      c.vx -= ox * out * 1.6;
-      c.vy -= oy * out * 1.6;
+      c.vx -= ox * out * bounce;
+      c.vy -= oy * out * bounce;
     }
-    c.vx *= 0.85;
-    c.vy *= 0.85;
+    const keep = inp.assist ? 0.95 : 0.85;
+    c.vx *= keep;
+    c.vy *= keep;
+    if (inp.assist) {
+      // Burnu yol yönüne çevir
+      const { dx, dy } = dirAt(t, n2.idx);
+      let dd = Math.atan2(dy, dx) - c.a;
+      while (dd > Math.PI) dd -= Math.PI * 2;
+      while (dd < -Math.PI) dd += Math.PI * 2;
+      if (Math.abs(dd) < Math.PI / 2) c.a += dd * 0.25;
+    }
   }
 
   updateLap(t, c, n2.idx, raceMs);
   // Duvara çarpmak komboyu kırar; pistin dışındayken (çim) puan birikmez.
-  if (race.mode === "drift") scoreDrift(c, dt, now, hitWall, n2.dist > TRACK_W / 2 + 20);
+  if (race.mode === "drift") scoreDrift(c, dt, now, hitWall, n2.dist > t.width / 2 + 20);
 }
 
 /** Drift puanlama: kayma × hız biriktirilir, süre uzadıkça çarpan artar; duvar/çim/savrulma komboyu kırar. */
@@ -330,7 +360,12 @@ export function botInput(t: Track, c: Car): Input {
   if (race.mode === "drift" && Math.abs(diff) > 0.3 && speed > 6.5)
     // Drift modunda botlar virajlara el freniyle kayarak girer
     return { up: false, down: true, left: diff < -0.06, right: diff > 0.06 };
-  return { up: Math.abs(diff) < 1.1 || speed < 3, down: Math.abs(diff) > 1.1 && speed > 5, left: diff < -0.06, right: diff > 0.06 };
+  // İleride keskin viraj varsa önceden yavaşla
+  const cur = dirAt(t, c.idx),
+    ahead = dirAt(t, (c.idx + Math.round(6 + speed * 4)) % n);
+  const dot = cur.dx * ahead.dx + cur.dy * ahead.dy;
+  const sharp = (Math.abs(diff) > 0.55 && speed > 7) || (dot < 0.6 && speed > 6 + dot * 4);
+  return { up: !sharp || speed < 3, down: sharp, left: diff < -0.06, right: diff > 0.06 };
 }
 
 export const isStraight = (t: Track, c: Car) => {

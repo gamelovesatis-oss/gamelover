@@ -42,7 +42,7 @@ export class TireSmoke {
           float d = length(gl_PointCoord - 0.5);
           float a = smoothstep(0.5, 0.05, d) * vAlpha;
           if (a < 0.01) discard;
-          gl_FragColor = vec4(0.86, 0.85, 0.9, a);
+          gl_FragColor = vec4(0.62, 0.62, 0.66, a);
         }`,
     });
     this.points = new THREE.Points(g, mat);
@@ -61,7 +61,7 @@ export class TireSmoke {
     this.age[i] = 0;
     this.life[i] = 45 + Math.random() * 35;
     this.size[i] = 7 + strength * 5;
-    this.alpha[i] = 0.35 * Math.min(1, strength);
+    this.alpha[i] = 0.2 * Math.min(1, strength);
   }
 
   update(dt: number) {
@@ -78,7 +78,7 @@ export class TireSmoke {
       this.vel[i * 3] *= 0.97;
       this.vel[i * 3 + 2] *= 0.97;
       this.size[i] += 0.55 * dt;
-      this.alpha[i] = Math.max(0, this.alpha[i] - (0.35 / this.life[i]) * dt * (t > 0.5 ? 1.4 : 0.7));
+      this.alpha[i] = Math.max(0, this.alpha[i] - (0.2 / this.life[i]) * dt * (t > 0.5 ? 1.4 : 0.7));
     }
     const g = this.points.geometry;
     g.attributes.position.needsUpdate = true;

@@ -30,7 +30,8 @@ import type { RaceNet } from "@/games/racing/net";
 import { VIEW_H, VIEW_W, burst, drawHud, drawMinimap, fmtTime, type Particle } from "@/games/racing/render";
 import { raceAudio } from "@/games/racing/audio";
 import { Scene3D } from "@/games/racing/scene3d";
-import { buildTrack, gridSlot } from "@/games/racing/track";
+import { buildTrack, gridSlot, type MapId } from "@/games/racing/track";
+import { TRAFFIC_COUNT, bumpTraffic, makeTraffic, trafficPose } from "@/games/racing/traffic";
 
 export type RosterEntry = { id: string; name: string; team: Team; type: CarType; bot: boolean; skill?: number };
 export type RaceResult = {
@@ -46,7 +47,6 @@ export type TouchInput = Omit<Input, "steer"> & { item: boolean; ability: boolea
 
 export const POINTS = [10, 8, 6, 5, 4, 3, 2, 1];
 const ITEMS: Item[] = ["turbo", "roket", "yag", "kalkan", "simsek"];
-const track = buildTrack();
 
 export function runRace(opts: {
   canvas: HTMLCanvasElement; // HUD katmanı (2D)
@@ -57,11 +57,15 @@ export function runRace(opts: {
   touch: { current: TouchInput };
   laps: number;
   mode: Mode;
+  map: MapId;
+  assist: boolean; // sürüş yardımı
   onEnd: (r: RaceResult) => void;
 }) {
   const { canvas, glCanvas, net, roster, meId, touch, onEnd } = opts;
   race.laps = opts.laps;
   race.mode = opts.mode;
+  const track = buildTrack(opts.map);
+  const traffic = makeTraffic(track, TRAFFIC_COUNT);
   const sfx = raceAudio();
   sfx.startMusic();
   sfx.startEngine();
@@ -239,6 +243,7 @@ export function runRace(opts: {
       left: false,
       right: false,
       steer: Math.max(-1, Math.min(1, keySteer + (t.steer ?? 0))),
+      assist: opts.assist,
     };
   }
 
@@ -292,10 +297,27 @@ export function runRace(opts: {
       for (const c of cars) {
         if (!owned(c)) continue;
         const auto = c.bot || c.finishMs != null;
+        // Bot: öndeki trafik aracının diğer tarafına geç
+        if (auto && traffic.length) {
+          const fx = Math.cos(c.a),
+            fy = Math.sin(c.a);
+          for (const tc of traffic) {
+            const pose = trafficPose(track, tc, raceMs);
+            const dx = pose.x - c.x,
+              dy = pose.y - c.y;
+            const ahead = dx * fx + dy * fy;
+            if (ahead > 0 && ahead < 190 && Math.abs(-dx * fy + dy * fx) < 45) c.lane = -Math.sign(tc.lane) * 70;
+          }
+        }
         const inp = c.quitAt != null ? { up: false, down: true, left: false, right: false } : auto ? botInput(track, c) : myInput();
         const lapBefore = c.lap;
         stepCar(track, c, inp, now, dt, raceMs);
         collideCars(c, cars);
+        // Şehir trafiği (yakındakilere bak)
+        for (const tc of traffic) {
+          const pose = trafficPose(track, tc, raceMs);
+          if (Math.abs(pose.x - c.x) < 60 && Math.abs(pose.y - c.y) < 60 && bumpTraffic(c, pose) && c === me) sfx.explosion(0.35);
+        }
         if (c.bot && race.mode !== "drift") botThink(c, now);
         if (c === me && race.mode === "drift") {
           if (c.lastBank) {

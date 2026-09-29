@@ -10,11 +10,12 @@ import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment
 import { buildCarModel, type CarRig } from "@/games/racing/carModel";
 import { SkidMarks, TireSmoke } from "@/games/racing/effects";
 import { FlagStarter } from "@/games/racing/starter";
+import { buildCity } from "@/games/racing/cityWorld";
+import { TRAFFIC_COUNT, makeTraffic, trafficPose, type TrafficCar } from "@/games/racing/traffic";
 import { colorOf, type Car, type Missile, type Oil } from "@/games/racing/engine";
 import type { Particle } from "@/games/racing/render";
 import { TRACK_W, WORLD_H, WORLD_W, dirAt, nearest, type Track } from "@/games/racing/track";
 
-const WALL = TRACK_W / 2 + 55;
 const MAX_PARTS = 800;
 
 // ---------- Doku üreticileri (tuvalden) ----------
@@ -174,6 +175,10 @@ export class Scene3D {
   private skids: SkidMarks;
   private starter: FlagStarter;
   private shake = 0;
+  private traffic: { car: TrafficCar; view: CarView }[] = [];
+  private pixelRatio = 1;
+  private maxRatio = 1;
+  private frameMs = 16;
   private lastSpin = 0;
   private frame = 0;
   private missiles = new Map<string, THREE.Object3D>();
@@ -198,8 +203,11 @@ export class Scene3D {
     private hq: boolean,
   ) {
     // Telefonda: kenar yumuşatma kapalı, 1x çözünürlük, daha kısa görüş mesafesi.
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: hq, powerPreference: "high-performance" });
-    this.renderer.setPixelRatio(hq ? Math.min(window.devicePixelRatio || 1, 2) : 1);
+    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: "high-performance" });
+    // Çözünürlük: cihazın izin verdiği en yüksekten başlar, kare hızı düşerse kendini ayarlar
+    this.maxRatio = Math.min(window.devicePixelRatio || 1, 2);
+    this.pixelRatio = hq ? this.maxRatio : Math.min(this.maxRatio, 1.5);
+    this.renderer.setPixelRatio(this.pixelRatio);
     this.camera.far = hq ? 6000 : 2600;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 0.9;
@@ -216,13 +224,14 @@ export class Scene3D {
     // Gerçekçi yansımalar için ortam haritası (boya, cam, krom)
     const pmrem = new THREE.PMREMGenerator(this.renderer);
     this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-    this.scene.environmentIntensity = 0.55;
+    this.scene.environmentIntensity = track.map === "sehir" ? 0.4 : 0.55;
+    if (track.map === "sehir") this.renderer.toneMappingExposure = 0.78;
     pmrem.dispose();
 
     this.buildWorld();
     for (const c of cars) {
       const isMe = c.id === meId;
-      const rig = buildCarModel(c.type, colorOf(c), { hq, beam: isMe || hq });
+      const rig = buildCarModel(c.type, colorOf(c), { hq: true, beam: isMe || hq, clearcoat: hq });
       const label = labelSprite(c.name, isMe ? "#ffffff" : colorOf(c), isMe);
       label.position.y = 34;
       rig.group.add(label);
@@ -234,6 +243,12 @@ export class Scene3D {
     this.scene.add(this.skids.mesh, this.smoke.points);
     this.starter = new FlagStarter(track, hq);
     this.scene.add(this.starter.group);
+    for (const tc of makeTraffic(track, TRAFFIC_COUNT)) {
+      const rig = buildCarModel(tc.type, tc.color, { hq, beam: false, clearcoat: false });
+      rig.glow.visible = false;
+      this.scene.add(rig.group);
+      this.traffic.push({ car: tc, view: { ...rig, label: new THREE.Sprite(), prevFwd: 0, prevA: 0, pitch: 0, roll: 0, steer: 0, bounce: 0 } });
+    }
 
     const pg = new THREE.BufferGeometry();
     pg.setAttribute("position", new THREE.BufferAttribute(this.partPos, 3));
@@ -259,10 +274,10 @@ export class Scene3D {
     this.resize();
   }
 
-  private buildWorld() {
+  /** Neon arena: ızgara zemin, neon pist, bordürler, bariyerler, silüet. */
+  private buildArena() {
     const t = this.track;
     const n = t.pts.length;
-
     // Zemin
     const gt = gridTex();
     gt.repeat.set(60, 60);
@@ -336,49 +351,9 @@ export class Scene3D {
     const wallMat = new THREE.MeshBasicMaterial({ color: "#8b5cf6", transparent: true, opacity: 0.2, side: THREE.DoubleSide, depthWrite: false });
     const topMat = new THREE.MeshBasicMaterial({ color: "#c4b5fd", side: THREE.DoubleSide });
     for (const s of [1, -1]) {
-      this.scene.add(new THREE.Mesh(strip(WALL * s, WALL * s, 0, 16), wallMat));
-      this.scene.add(new THREE.Mesh(strip(WALL * s, (WALL + 3) * s, 16, 16), topMat));
+      this.scene.add(new THREE.Mesh(strip(t.wall * s, t.wall * s, 0, 16), wallMat));
+      this.scene.add(new THREE.Mesh(strip(t.wall * s, (t.wall + 3) * s, 16, 16), topMat));
     }
-
-    // Başlangıç çizgisi
-    const p0 = t.pts[0];
-    const d0 = dirAt(t, 0);
-    const ct = checkerTex();
-    ct.repeat.set(1, TRACK_W / 32);
-    const start = new THREE.Mesh(new THREE.PlaneGeometry(24, TRACK_W), new THREE.MeshBasicMaterial({ map: ct }));
-    start.rotation.x = -Math.PI / 2;
-    start.rotation.z = -Math.atan2(d0.dy, d0.dx);
-    start.position.set(p0.x, 0.9, p0.y);
-    this.scene.add(start);
-
-    // Başlangıç kemeri
-    const archMat = new THREE.MeshStandardMaterial({ color: "#111827", emissive: "#f472b6", emissiveIntensity: 0.6 });
-    const nx = -d0.dy,
-      ny = d0.dx;
-    for (const s of [1, -1]) {
-      const post = new THREE.Mesh(new THREE.BoxGeometry(8, 90, 8), archMat);
-      post.position.set(p0.x + nx * (WALL + 10) * s, 45, p0.y + ny * (WALL + 10) * s);
-      this.scene.add(post);
-    }
-    const bannerTex = canvasTex(1024, 128, (g) => {
-      g.fillStyle = "#0b0720";
-      g.fillRect(0, 0, 1024, 128);
-      const grd = g.createLinearGradient(0, 0, 1024, 0);
-      grd.addColorStop(0, "#8b5cf6");
-      grd.addColorStop(0.5, "#22d3ee");
-      grd.addColorStop(1, "#f472b6");
-      g.fillStyle = grd;
-      g.font = "bold 78px sans-serif";
-      g.textAlign = "center";
-      g.textBaseline = "middle";
-      g.fillText("GAME LOVER · ÇORUM", 512, 68);
-    });
-    const bannerMat = new THREE.MeshBasicMaterial({ map: bannerTex });
-    // Uzun kenar (z) pistin karşısına uzanır; yazılı yüzler (±x) sürüş yönüne bakar.
-    const banner = new THREE.Mesh(new THREE.BoxGeometry(6, 34, (WALL + 10) * 2 + 8), [bannerMat, bannerMat, archMat, archMat, archMat, archMat]);
-    banner.position.set(p0.x, 96, p0.y);
-    banner.rotation.y = Math.atan2(nx, ny);
-    this.scene.add(banner);
 
     // Şehir silueti — tüm binalar tek geometri/tek çizimde (telefonda akıcılık için)
     const wt = windowsTex();
@@ -392,7 +367,7 @@ export class Scene3D {
       const w = 60 + Math.random() * 110,
         d = 60 + Math.random() * 110,
         h = 60 + Math.random() * 380;
-      if (nearest(t, x, z).dist < WALL + 40 + Math.max(w, d) / 2 + 30) continue;
+      if (nearest(t, x, z).dist < t.wall + 40 + Math.max(w, d) / 2 + 30) continue;
       const geo = new THREE.BoxGeometry(w, h, d);
       const uv = geo.getAttribute("uv") as THREE.BufferAttribute;
       for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * (Math.max(w, d) / 40), uv.getY(i) * (h / 40));
@@ -415,6 +390,53 @@ export class Scene3D {
       : new THREE.MeshLambertMaterial({ color: "#0d0b22", emissive: "#ffffff", emissiveMap: wt, emissiveIntensity: 0.85 });
     this.scene.add(new THREE.Mesh(city, cityMat));
     this.scene.add(new THREE.LineSegments(cityEdges, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.8 })));
+
+  }
+
+  private buildWorld() {
+    const t = this.track;
+    if (t.map === "sehir") buildCity(this.scene, t, this.hq);
+    else this.buildArena();
+
+    // Başlangıç çizgisi
+    const p0 = t.pts[0];
+    const d0 = dirAt(t, 0);
+    const ct = checkerTex();
+    ct.repeat.set(1, t.width / 32);
+    const start = new THREE.Mesh(new THREE.PlaneGeometry(24, t.width), new THREE.MeshBasicMaterial({ map: ct }));
+    start.rotation.x = -Math.PI / 2;
+    start.rotation.z = -Math.atan2(d0.dy, d0.dx);
+    start.position.set(p0.x, 0.9, p0.y);
+    this.scene.add(start);
+
+    // Başlangıç kemeri
+    const archMat = new THREE.MeshStandardMaterial({ color: "#111827", emissive: "#f472b6", emissiveIntensity: 0.6 });
+    const nx = -d0.dy,
+      ny = d0.dx;
+    for (const s of [1, -1]) {
+      const post = new THREE.Mesh(new THREE.BoxGeometry(8, 90, 8), archMat);
+      post.position.set(p0.x + nx * (t.wall + 10) * s, 45, p0.y + ny * (t.wall + 10) * s);
+      this.scene.add(post);
+    }
+    const bannerTex = canvasTex(1024, 128, (g) => {
+      g.fillStyle = "#0b0720";
+      g.fillRect(0, 0, 1024, 128);
+      const grd = g.createLinearGradient(0, 0, 1024, 0);
+      grd.addColorStop(0, "#8b5cf6");
+      grd.addColorStop(0.5, "#22d3ee");
+      grd.addColorStop(1, "#f472b6");
+      g.fillStyle = grd;
+      g.font = "bold 78px sans-serif";
+      g.textAlign = "center";
+      g.textBaseline = "middle";
+      g.fillText("GAME LOVER · ÇORUM", 512, 68);
+    });
+    const bannerMat = new THREE.MeshBasicMaterial({ map: bannerTex });
+    // Uzun kenar (z) pistin karşısına uzanır; yazılı yüzler (±x) sürüş yönüne bakar.
+    const banner = new THREE.Mesh(new THREE.BoxGeometry(6, 34, (t.wall + 10) * 2 + 8), [bannerMat, bannerMat, archMat, archMat, archMat, archMat]);
+    banner.position.set(p0.x, 96, p0.y);
+    banner.rotation.y = Math.atan2(nx, ny);
+    this.scene.add(banner);
 
     // Yıldızlar
     const sp: number[] = [];
@@ -459,6 +481,18 @@ export class Scene3D {
   update(s: { now: number; dt: number; cars: Car[]; boxesAt: number[]; missiles: Missile[]; oils: Oil[]; parts: Particle[]; countdownMs: number; sinceStartMs: number }) {
     const { now, dt } = s;
     this.frame++;
+    // Uyarlanabilir çözünürlük (her ~1.5 sn)
+    this.frameMs = this.frameMs * 0.95 + dt * 16.667 * 0.05;
+    if (this.frame % 90 === 0) {
+      let r = this.pixelRatio;
+      if (this.frameMs > 21 && r > 1) r = Math.max(1, r - 0.25);
+      else if (this.frameMs < 17.5 && r < this.maxRatio) r = Math.min(this.maxRatio, r + 0.25);
+      if (r !== this.pixelRatio) {
+        this.pixelRatio = r;
+        this.renderer.setPixelRatio(r);
+        this.resize();
+      }
+    }
     // Araçlar: süspansiyon, direksiyon, tekerlek dönüşü, fren lambası, duman ve iz
     const me0 = s.cars.find((c) => c.id === this.meId)!;
     for (const c of s.cars) {
@@ -520,6 +554,13 @@ export class Scene3D {
     }
     this.smoke.update(dt);
     this.starter.update(s.sinceStartMs, dt, now);
+    // Şehir trafiği
+    for (const { car, view } of this.traffic) {
+      const p = trafficPose(this.track, car, s.sinceStartMs);
+      view.group.position.set(p.x, 0, p.y);
+      view.group.rotation.y = -p.a;
+      for (const w of view.spinners) w.rotation.z -= (p.speed / view.wheelR) * dt;
+    }
 
     // Kutular
     this.boxes.forEach((b, i) => {

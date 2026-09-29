@@ -1,7 +1,7 @@
 "use client";
 
 import * as THREE from "three";
-import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
+import { mergeGeometries, mergeVertices } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import type { CarType } from "@/games/racing/engine";
 
 /**
@@ -78,6 +78,31 @@ const SPECS: Record<CarType, Spec> = {
   },
 };
 
+let plateCache: THREE.Texture | null = null;
+function plateTex() {
+  if (plateCache) return plateCache;
+  const c = document.createElement("canvas");
+  c.width = 256;
+  c.height = 64;
+  const g = c.getContext("2d")!;
+  g.fillStyle = "#f8fafc";
+  g.fillRect(0, 0, 256, 64);
+  g.fillStyle = "#1d4ed8";
+  g.fillRect(0, 0, 30, 64);
+  g.fillStyle = "#fff";
+  g.font = "bold 16px sans-serif";
+  g.fillText("TR", 4, 56);
+  g.fillStyle = "#111";
+  g.font = "bold 40px sans-serif";
+  g.fillText("19 GL 019", 40, 47);
+  g.strokeStyle = "#111";
+  g.lineWidth = 4;
+  g.strokeRect(2, 2, 252, 60);
+  plateCache = new THREE.CanvasTexture(c);
+  plateCache.colorSpace = THREE.SRGBColorSpace;
+  return plateCache;
+}
+
 let radialCache: THREE.Texture | null = null;
 function radialTex() {
   if (radialCache) return radialCache;
@@ -103,6 +128,16 @@ function extrude(pts: [number, number][], depth: number, bevel: number, segs: nu
   return g;
 }
 
+/** Kaporta yüzeyini yumuşat (keskin yüzey geçişleri yerine akıcı yansıma). */
+function smooth(g: THREE.BufferGeometry) {
+  g.deleteAttribute("uv");
+  g.deleteAttribute("normal");
+  const m = mergeVertices(g, 0.05);
+  m.computeVertexNormals();
+  g.dispose();
+  return m;
+}
+
 /** Birleştirme öncesi: indeksi kaldır, sadece konum/normal/uv bırak, konumla. */
 function prep(g: THREE.BufferGeometry, x = 0, y = 0, z = 0, ry = 0, rz = 0) {
   let geo = g.index ? g.toNonIndexed() : g;
@@ -119,7 +154,7 @@ function prep(g: THREE.BufferGeometry, x = 0, y = 0, z = 0, ry = 0, rz = 0) {
 const box = (w: number, h: number, d: number) => new THREE.BoxGeometry(w, h, d);
 const merged = (list: THREE.BufferGeometry[], mat: THREE.Material) => new THREE.Mesh(mergeGeometries(list), mat);
 
-export function buildCarModel(type: CarType, color: string, opts: { hq: boolean; beam: boolean }): CarRig {
+export function buildCarModel(type: CarType, color: string, opts: { hq: boolean; beam: boolean; clearcoat?: boolean }): CarRig {
   const s = SPECS[type];
   const { hq } = opts;
   const group = new THREE.Group();
@@ -127,7 +162,7 @@ export function buildCarModel(type: CarType, color: string, opts: { hq: boolean;
   group.add(body);
 
   // ---------- Malzemeler ----------
-  const paint = hq
+  const paint = (opts.clearcoat ?? hq)
     ? new THREE.MeshPhysicalMaterial({ color, metalness: 0.55, roughness: 0.28, clearcoat: 1, clearcoatRoughness: 0.06, envMapIntensity: 1.2 })
     : new THREE.MeshStandardMaterial({ color, metalness: 0.55, roughness: 0.3, envMapIntensity: 1.1 });
   const dark = new THREE.MeshStandardMaterial({ color: "#0c0d12", metalness: 0.3, roughness: 0.55 });
@@ -140,7 +175,7 @@ export function buildCarModel(type: CarType, color: string, opts: { hq: boolean;
   // ---------- Kaporta ----------
   const paintGeos: THREE.BufferGeometry[] = [];
   const darkGeos: THREE.BufferGeometry[] = [];
-  paintGeos.push(prep(extrude(s.body, s.W, 1.6, hq ? 4 : 2)));
+  paintGeos.push(prep(smooth(extrude(s.body, s.W, 2.2, hq ? 5 : 3))));
   // Tavan paneli
   paintGeos.push(prep(box(s.roof[1] - s.roof[0], 0.9, s.W - 6.4), (s.roof[0] + s.roof[1]) / 2, s.roof[2] + 0.3, 0));
   // Aynalar
@@ -150,6 +185,23 @@ export function buildCarModel(type: CarType, color: string, opts: { hq: boolean;
     paintGeos.push(prep(box(2.2, 1.7, 2.6), cabFront - 3, belt + 2.2, side * (s.W / 2 + 0.6)));
     darkGeos.push(prep(box(0.8, 0.6, 1.8), cabFront - 3.4, belt + 1.2, side * (s.W / 2 - 0.4)));
   }
+  // Tekerlek kemerleri: tekerleğin üstünü saran kavisli çamurluk
+  for (const x of [s.axle, -s.axle])
+    for (const side of [-1, 1]) {
+      const arch = new THREE.TorusGeometry(s.r + 1.4, 1.3, 8, hq ? 18 : 10, Math.PI);
+      paintGeos.push(prep(arch, x, s.r, side * (s.W / 2 + 0.2)));
+      const liner = new THREE.CylinderGeometry(s.r + 1.2, s.r + 1.2, 4, hq ? 16 : 8, 1, true, Math.PI / 2, Math.PI); // üst yarı
+      liner.rotateX(Math.PI / 2);
+      darkGeos.push(prep(liner, x, s.r, side * (s.W / 2 - 1.8)));
+    }
+  // Kapı direği (B sütunu) ve cam çerçevesi
+  const cabRear = s.cabin[0][0];
+  const cabTop = Math.max(...s.cabin.map((q) => q[1]));
+  for (const side of [-1, 1]) {
+    darkGeos.push(prep(box(1.4, cabTop - belt - 0.6, 0.4), (cabRear + cabFront) / 2 - 1, (belt + cabTop) / 2, side * ((s.W - 4.6) / 2 + 0.1)));
+    darkGeos.push(prep(box(cabFront - cabRear - 2, 0.6, 0.4), (cabRear + cabFront) / 2, belt + 0.4, side * ((s.W - 4.6) / 2 + 0.1)));
+  }
+
   // Kanat
   if (s.wing) {
     paintGeos.push(prep(box(5.5, 0.9, s.W + 1.5), -s.L / 2 + 3.2, s.wing, 0));
@@ -162,6 +214,17 @@ export function buildCarModel(type: CarType, color: string, opts: { hq: boolean;
   darkGeos.push(prep(box(3.2, 1.8, s.W * 0.78), -s.L / 2 + 0.8, 3.6, 0));
   darkGeos.push(prep(box(s.axle * 1.35, 1.3, s.W + 0.8), 0, 3.6, 0));
   body.add(merged(paintGeos, paint), merged(darkGeos, dark));
+
+  // Plakalar (Çorum: 19)
+  if (hq) {
+    const plateMat = new THREE.MeshStandardMaterial({ map: plateTex(), roughness: 0.5 });
+    const front = new THREE.Mesh(box(0.3, 2.2, 7.5), plateMat);
+    front.position.set(s.L / 2 + 0.9, 4.6, 0);
+    const rear = new THREE.Mesh(box(0.3, 2.2, 7.5), plateMat);
+    rear.position.set(-s.L / 2 - 0.5, s.tail - 3, 0);
+    rear.rotation.y = Math.PI;
+    body.add(front, rear);
+  }
 
   // Cam (kabin)
   body.add(new THREE.Mesh(prep(extrude(s.cabin, s.W - 4.6, 1.2, hq ? 3 : 1)), glass));

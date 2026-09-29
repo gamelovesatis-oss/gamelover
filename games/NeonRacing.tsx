@@ -9,6 +9,7 @@ import { YT_PLAYLIST, YouTubeDock, fetchYouTubeTitle, parseYouTubeId, type YTVid
 import { CAR_TYPES, LAP_OPTIONS, MODE_NAME, TEAM_COLOR, TEAM_NAME, type CarType, type Mode, type Team } from "@/games/racing/engine";
 import { enterFullscreenLandscape, exitFullscreen } from "@/games/racing/fullscreen";
 import { RaceNet, type Player } from "@/games/racing/net";
+import { MAP_NAME, type MapId } from "@/games/racing/track";
 import { fmtTime } from "@/games/racing/render";
 import { POINTS, runRace, type RaceResult, type RosterEntry, type TouchInput } from "@/games/racing/runner";
 import { cn } from "@/lib/utils";
@@ -32,10 +33,12 @@ export default function NeonRacing({ onScore, onGameOver }: GameProps) {
   const [bots, setBots] = useState(5);
   const [mode, setMode] = useState<Mode>("herkes");
   const [laps, setLaps] = useState(3);
+  const [map, setMap] = useState<MapId>("arena");
+  const [assist, setAssist] = useState(true);
   const [notice, setNotice] = useState("");
   const [copied, setCopied] = useState(false);
   const [result, setResult] = useState<RaceResult | null>(null);
-  const [race, setRace] = useState<{ id: number; roster: RosterEntry[]; laps: number; mode: Mode } | null>(null);
+  const [race, setRace] = useState<{ id: number; roster: RosterEntry[]; laps: number; mode: Mode; map: MapId } | null>(null);
   const [isTouch, setIsTouch] = useState(false);
   const [immersive, setImmersive] = useState(false);
   const [dims, setDims] = useState({ w: 1280, h: 800 });
@@ -59,6 +62,10 @@ export default function NeonRacing({ onScore, onGameOver }: GameProps) {
     if (coarse) setImmersive(true);
     setMuted(raceAudio().muted);
     setMusicSrc(raceAudio().source);
+    try {
+      const a = localStorage.getItem("gl-assist");
+      setAssist(a == null ? coarse : a === "1");
+    } catch {}
     try {
       const saved = JSON.parse(localStorage.getItem("gl-yt-list") ?? "[]") as YTVideo[];
       if (Array.isArray(saved)) setYtList(saved.filter((v) => v && typeof v.id === "string"));
@@ -119,13 +126,13 @@ export default function NeonRacing({ onScore, onGameOver }: GameProps) {
       localStorage.setItem("gl-car", type);
     } catch {}
     setPhase("connecting");
-    const net = new RaceNet(room, { id: idRef.current, name: clean, team, type, joinedAt: Date.now(), mode, laps });
+    const net = new RaceNet(room, { id: idRef.current, name: clean, team, type, joinedAt: Date.now(), mode, laps, map });
     if (room === "solo") net.online = false; // antrenman her zaman çevrimdışı
     netRef.current = net;
     net.onPresence((list) => setPlayers([...list]));
-    net.on("start", (p: { roster: RosterEntry[]; laps?: number; mode?: Mode }) => {
+    net.on("start", (p: { roster: RosterEntry[]; laps?: number; mode?: Mode; map?: MapId }) => {
       if (p.roster.some((r) => r.id === idRef.current)) {
-        setRace((r) => ({ id: (r?.id ?? 0) + 1, roster: p.roster, laps: p.laps ?? 3, mode: p.mode ?? "herkes" }));
+        setRace((r) => ({ id: (r?.id ?? 0) + 1, roster: p.roster, laps: p.laps ?? 3, mode: p.mode ?? "herkes", map: p.map ?? "arena" }));
         setPhase("race");
       } else setNotice("Bu odada yarış başladı. Bitince bir sonraki yarışa katılabilirsin.");
     });
@@ -139,6 +146,7 @@ export default function NeonRacing({ onScore, onGameOver }: GameProps) {
     if (p.type) setType(p.type);
     if (p.mode) setMode(p.mode);
     if (p.laps) setLaps(p.laps);
+    if (p.map) setMap(p.map);
     await netRef.current?.update(p);
   }
 
@@ -162,7 +170,7 @@ export default function NeonRacing({ onScore, onGameOver }: GameProps) {
       });
     }
     list.sort(() => Math.random() - 0.5); // ızgarayı karıştır
-    net.sendAll("start", { roster: list, laps, mode });
+    net.sendAll("start", { roster: list, laps, mode, map });
   }
 
   useEffect(() => {
@@ -181,6 +189,8 @@ export default function NeonRacing({ onScore, onGameOver }: GameProps) {
       meId: idRef.current,
       touch,
       laps: race.laps,
+      map: race.map,
+      assist,
       mode: race.mode,
       onEnd: (r) => {
         setResult(r);
@@ -214,6 +224,7 @@ export default function NeonRacing({ onScore, onGameOver }: GameProps) {
   const hostPlayer = players[0];
   const shownMode: Mode = isHost ? mode : (hostPlayer?.mode ?? mode);
   const shownLaps = isHost ? laps : (hostPlayer?.laps ?? laps);
+  const shownMap: MapId = isHost ? map : (hostPlayer?.map ?? map);
 
   // Telefon dik tutuluyor ve ekran dönmüyorsa oyunu 90° çevirerek yatay göster
   const forced = immersive && isTouch && dims.h > dims.w;
@@ -339,6 +350,44 @@ export default function NeonRacing({ onScore, onGameOver }: GameProps) {
                 </div>
               </div>
 
+              {/* Pist ve sürüş yardımı */}
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div>
+                  <label className="label">Pist</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    {(["arena", "sehir"] as MapId[]).map((m) => (
+                      <button
+                        key={m}
+                        disabled={!isHost}
+                        onClick={() => change({ map: m })}
+                        className={cn(
+                          "rounded-xl border-2 px-3 py-2.5 text-left text-sm transition disabled:cursor-default",
+                          shownMap === m ? "border-neon-violet bg-neon-violet/15 text-white" : "border-white/10 text-slate-400",
+                        )}
+                      >
+                        <div className="font-bold">{m === "arena" ? "🌃 " : "🏙️ "}{MAP_NAME[m]}</div>
+                        <div className="text-[11px] opacity-70">{m === "arena" ? "Neon pist, virajlı" : "Düz şehir sokakları, trafik var"}</div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <label className="label">Sürüş yardımı</label>
+                  <button
+                    onClick={() => {
+                      setAssist(!assist);
+                      try {
+                        localStorage.setItem("gl-assist", assist ? "0" : "1");
+                      } catch {}
+                    }}
+                    className={cn("w-full rounded-xl border-2 px-3 py-2.5 text-left text-sm transition", assist ? "border-neon-lime bg-neon-lime/10 text-white" : "border-white/10 text-slate-400")}
+                  >
+                    <div className="font-bold">{assist ? "✅ Açık (kolay)" : "⬜ Kapalı (uzman)"}</div>
+                    <div className="text-[11px] opacity-70">Araç yolu kendisi takip eder, virajda yavaşlar, duvarda kayar</div>
+                  </button>
+                </div>
+              </div>
+
               {/* Oyuncular */}
               {shownMode === "takim" ? (
                 <div className="grid gap-4 sm:grid-cols-2">
@@ -392,7 +441,7 @@ export default function NeonRacing({ onScore, onGameOver }: GameProps) {
                     </select>
                   </label>
                   <button onClick={start} className="btn-primary ml-auto px-6 py-4 text-base">
-                    <Flag className="h-5 w-5" /> Başlat · {MODE_NAME[mode]} · {laps} tur ({Math.min(MAX_CARS, players.length + bots)} araç)
+                    <Flag className="h-5 w-5" /> Başlat · {MAP_NAME[map]} · {MODE_NAME[mode]} · {laps} tur ({Math.min(MAX_CARS, players.length + bots)} araç)
                   </button>
                 </div>
               ) : (
@@ -405,7 +454,7 @@ export default function NeonRacing({ onScore, onGameOver }: GameProps) {
         </AnimatePresence>
       </div>
 
-      {dockVideos && phase !== "menu" && phase !== "connecting" && (
+      {dockVideos && phase !== "menu" && phase !== "connecting" && !(isTouch && racing) && (
         <YouTubeDock
           key={dockVideos.map((v) => v.id).join(",")}
           videos={dockVideos}
@@ -595,7 +644,7 @@ function MusicPicker({
       )}
 
       <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
-        {(source === "youtube" || source === "ytlist") && <span>Şarkılar köşedeki YouTube oynatıcısında çalar.</span>}
+        {(source === "youtube" || source === "ytlist") && <span>Şarkılar köşedeki YouTube oynatıcısında çalar. Telefonda yarış sırasında oynatıcı gizlenir ve YouTube müziği durur (YouTube gizli çalmaya izin vermiyor) — telefonda kesintisiz müzik için Drift Phonk ya da kendi dosyanı seç.</span>}
         <button
           onClick={() => (fileName && source !== "custom" ? choose("custom") : input.current?.click())}
           className={cn("underline", source === "custom" && "text-neon-pink")}
@@ -675,27 +724,33 @@ function Stat({ label, v }: { label: string; v: number }) {
 }
 
 /**
- * Telefon eğimini direksiyona çevirir: -1 (sol) … 1 (sağ).
+ * Telefonun direksiyon ekseninde eğim açısı (derece).
  * forced: ekran dönmediği için oyunu biz 90° çevirdiysek telefon yan tutuluyordur.
  */
-function tiltToSteer(e: DeviceOrientationEvent, forced: boolean) {
+function tiltDeg(e: DeviceOrientationEvent, forced: boolean) {
   const angle = forced ? 90 : ((screen.orientation?.angle ?? (window as unknown as { orientation?: number }).orientation ?? 0) as number);
   const beta = e.beta ?? 0,
     gamma = e.gamma ?? 0;
-  let deg: number;
-  if (angle === 90) deg = beta;
-  else if (angle === 270 || angle === -90) deg = -beta;
-  else if (angle === 180) deg = -gamma;
-  else deg = gamma;
-  const DEAD = 3,
-    FULL = 24;
+  if (angle === 90) return beta;
+  if (angle === 270 || angle === -90) return -beta;
+  if (angle === 180) return -gamma;
+  return gamma;
+}
+
+/** Açıyı -1..1 direksiyona çevir: ölü bölge + yumuşak eğri (küçük eğimlerde hassas kontrol). */
+function steerCurve(deg: number) {
+  const DEAD = 3.5,
+    FULL = 28;
   const a = Math.abs(deg);
   if (a < DEAD) return 0;
-  return Math.sign(deg) * Math.min(1, (a - DEAD) / (FULL - DEAD));
+  const x = Math.min(1, (a - DEAD) / (FULL - DEAD));
+  return Math.sign(deg) * (0.35 * x + 0.65 * x * x);
 }
 
 function TouchPad({ touch, onEnableTilt, forced }: { touch: React.MutableRefObject<TouchInput>; onEnableTilt: () => void; forced: boolean }) {
   const [tilt, setTilt] = useState<"bekleniyor" | "aktif" | "yok">("bekleniyor");
+  const neutral = useRef<number | null>(null); // telefonun "düz" kabul edilen açısı
+  const lastDeg = useRef(0);
   const [hasItem, setHasItem] = useState(false);
   const wheelRef = useRef<HTMLDivElement>(null);
 
@@ -708,7 +763,12 @@ function TouchPad({ touch, onEnableTilt, forced }: { touch: React.MutableRefObje
         got = true;
         setTilt("aktif");
       }
-      touch.current.steer = tiltToSteer(e, forced);
+      const deg = tiltDeg(e, forced);
+      lastDeg.current = deg;
+      // İlk okumada telefonu nasıl tutuyorsan o açı "düz" kabul edilir
+      if (neutral.current == null) neutral.current = deg;
+      const smooth = (touch.current.steer ?? 0) * 0.6 + steerCurve(deg - neutral.current) * 0.4;
+      touch.current.steer = Math.abs(smooth) < 0.01 ? 0 : smooth;
     };
     window.addEventListener("deviceorientation", onTilt);
     const fallback = setTimeout(() => !got && setTilt("yok"), 1500);
@@ -778,7 +838,12 @@ function TouchPad({ touch, onEnableTilt, forced }: { touch: React.MutableRefObje
           <div ref={wheelRef} className="mx-auto grid h-12 w-12 place-items-center rounded-full border-4 border-white/50 text-white/80">
             <span className="h-4 w-1 -translate-y-2 rounded bg-neon-cyan" />
           </div>
-          <div className="mt-1 text-[10px] font-semibold uppercase tracking-wider text-white/60">Telefonu eğ</div>
+          <button
+            onClick={() => (neutral.current = lastDeg.current)}
+            className="pointer-events-auto mt-1 rounded-lg bg-white/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-white/80 backdrop-blur"
+          >
+            ⟲ Ortala
+          </button>
         </div>
       )}
       {tilt === "bekleniyor" && (
