@@ -24,8 +24,9 @@ import {
   type Team,
 } from "@/games/racing/engine";
 import type { RaceNet } from "@/games/racing/net";
-import { VIEW_H, VIEW_W, burst, drawCar, drawHud, drawMinimap, drawSkid, drawWorldObjects, fmtTime, renderTrack, type Particle } from "@/games/racing/render";
-import { WORLD_H, WORLD_W, buildTrack, gridSlot } from "@/games/racing/track";
+import { VIEW_H, VIEW_W, burst, drawHud, drawMinimap, fmtTime, type Particle } from "@/games/racing/render";
+import { Scene3D } from "@/games/racing/scene3d";
+import { buildTrack, gridSlot } from "@/games/racing/track";
 
 export type RosterEntry = { id: string; name: string; team: Team; type: CarType; bot: boolean; skill?: number };
 export type RaceResult = {
@@ -42,20 +43,20 @@ const ITEMS: Item[] = ["turbo", "roket", "yag", "kalkan", "simsek"];
 const track = buildTrack();
 
 export function runRace(opts: {
-  canvas: HTMLCanvasElement;
+  canvas: HTMLCanvasElement; // HUD katmanı (2D)
+  glCanvas: HTMLCanvasElement; // 3D sahne
   net: RaceNet;
   roster: RosterEntry[];
   meId: string;
   touch: { current: TouchInput };
   onEnd: (r: RaceResult) => void;
 }) {
-  const { canvas, net, roster, meId, touch, onEnd } = opts;
+  const { canvas, glCanvas, net, roster, meId, touch, onEnd } = opts;
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   canvas.width = VIEW_W * dpr;
   canvas.height = VIEW_H * dpr;
   const g = canvas.getContext("2d")!;
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
-  const trackCv = renderTrack(track);
 
   const cars: Car[] = roster.map((r, i) => makeCar(r, gridSlot(track, i)));
   const byId = new Map(cars.map((c) => [c.id, c]));
@@ -74,8 +75,10 @@ export function runRace(opts: {
   let raf = 0;
   let ended = false;
   let firstFinishAt: number | null = null;
-  let camX = me.x - VIEW_W / 2,
-    camY = me.y - VIEW_H / 2;
+  const hq = !window.matchMedia("(pointer: coarse)").matches;
+  const scene = new Scene3D(glCanvas, track, cars, meId, hq);
+  const ro = new ResizeObserver(() => scene.resize());
+  ro.observe(glCanvas);
   let pressedItem = false,
     pressedAbility = false;
   let toast: { text: string; until: number } | null = null;
@@ -190,7 +193,7 @@ export function runRace(opts: {
   function myInput(): Input {
     const k = (...n: string[]) => n.some((x) => keys.has(x));
     return {
-      up: k("arrowup", "w") || touch.current.up,
+      up: k("arrowup", "w") || (touch.current.up && !touch.current.down),
       down: k("arrowdown", "s") || touch.current.down,
       left: k("arrowleft", "a") || touch.current.left,
       right: k("arrowright", "d") || touch.current.right,
@@ -234,7 +237,6 @@ export function runRace(opts: {
         const lapBefore = c.lap;
         stepCar(track, c, inp, now, dt, raceMs);
         collideCars(c, cars);
-        if (c.drift > 2.2 && Math.hypot(c.vx, c.vy) > 4) drawSkid(trackCv, c);
         if (c.bot) botThink(c, now);
         if (c === me && c.lap > lapBefore && c.lap > 1 && c.finishMs == null) say(c.lap === LAPS ? "🏁 SON TUR!" : `Tur ${c.lap}`);
         if (c === me && c.finishMs != null && lapBefore <= LAPS && c.lap > LAPS) say(`🏆 Bitirdin! ${rank.indexOf(c) + 1}. sıra`, 4000);
@@ -325,22 +327,10 @@ export function runRace(opts: {
     }
 
     // ---------- Çizim ----------
-    camX += (me.x - VIEW_W / 2 + me.vx * 12 - camX) * 0.12;
-    camY += (me.y - VIEW_H / 2 + me.vy * 12 - camY) * 0.12;
-    camX = Math.max(0, Math.min(WORLD_W - VIEW_W, camX));
-    camY = Math.max(0, Math.min(WORLD_H - VIEW_H, camY));
+    scene.update({ now, dt, cars, boxesAt, missiles, oils, parts, countdownMs: Math.max(0, startAt - now) });
+    g.clearRect(0, 0, VIEW_W, VIEW_H);
 
-    g.fillStyle = "#05040b";
-    g.fillRect(0, 0, VIEW_W, VIEW_H);
-    g.save();
-    g.translate(-camX, -camY);
-    g.drawImage(trackCv, camX, camY, VIEW_W, VIEW_H, camX, camY, VIEW_W, VIEW_H);
-    drawWorldObjects(g, track, boxesAt, missiles, oils, parts, now);
-    for (const c of cars) if (c !== me) drawCar(g, c, now, false);
-    drawCar(g, me, now, true);
-    g.restore();
-
-    drawMinimap(g, track, cars, meId);
+    drawMinimap(g, track, cars, meId, !hq);
     drawHud(g, me, rank.indexOf(me), cars.length, me.finishMs ?? raceMs, now);
 
     // Canlı sıralama listesi
@@ -403,6 +393,8 @@ export function runRace(opts: {
 
   return () => {
     cancelAnimationFrame(raf);
+    ro.disconnect();
+    scene.dispose();
     window.removeEventListener("keydown", kd);
     window.removeEventListener("keyup", ku);
   };

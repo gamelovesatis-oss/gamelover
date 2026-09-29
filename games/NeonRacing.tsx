@@ -1,7 +1,7 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
-import { Bot, Check, Copy, Crown, Flag, Loader2, Users, Wifi, WifiOff, Zap } from "lucide-react";
+import { Bot, Check, Copy, Crown, Flag, Loader2, Maximize2, Minimize2, Users, Wifi, WifiOff, Zap } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { GameProps } from "@/games/hooks";
 import { CAR_TYPES, TEAM_COLOR, TEAM_NAME, type CarType, type Team } from "@/games/racing/engine";
@@ -31,12 +31,47 @@ export default function NeonRacing({ onScore, onGameOver }: GameProps) {
   const [copied, setCopied] = useState(false);
   const [result, setResult] = useState<RaceResult | null>(null);
   const [roster, setRoster] = useState<RosterEntry[]>([]);
+  const [isTouch, setIsTouch] = useState(false);
+  const [immersive, setImmersive] = useState(false);
+  const [portrait, setPortrait] = useState(false);
   const netRef = useRef<RaceNet | null>(null);
   const idRef = useRef(newId());
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const glRef = useRef<HTMLCanvasElement>(null);
   const touch = useRef<TouchInput>({ up: false, down: false, left: false, right: false, item: false, ability: false });
   const cb = useRef({ onScore, onGameOver });
   cb.current = { onScore, onGameOver };
+
+  useEffect(() => {
+    const coarse = window.matchMedia("(pointer: coarse)").matches || navigator.maxTouchPoints > 0;
+    setIsTouch(coarse);
+    const onResize = () => setPortrait(window.innerHeight > window.innerWidth);
+    onResize();
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  useEffect(() => {
+    document.documentElement.classList.toggle("gl-immersive", immersive);
+    return () => document.documentElement.classList.remove("gl-immersive");
+  }, [immersive]);
+
+  function goImmersive() {
+    setImmersive(true);
+    try {
+      const el = document.documentElement;
+      if (!document.fullscreenElement && el.requestFullscreen)
+        el.requestFullscreen({ navigationUI: "hide" })
+          .then(() => (screen.orientation as ScreenOrientation & { lock?: (o: string) => Promise<void> })?.lock?.("landscape"))
+          .catch(() => {});
+    } catch {}
+  }
+  function exitImmersive() {
+    setImmersive(false);
+    try {
+      if (document.fullscreenElement) void document.exitFullscreen();
+    } catch {}
+  }
 
   useEffect(() => {
     try {
@@ -50,6 +85,7 @@ export default function NeonRacing({ onScore, onGameOver }: GameProps) {
   }, []);
 
   async function enter(room: string) {
+    if (isTouch) goImmersive();
     const clean = name.trim().slice(0, 14) || "Oyuncu";
     try {
       localStorage.setItem("gl-player", clean);
@@ -102,9 +138,10 @@ export default function NeonRacing({ onScore, onGameOver }: GameProps) {
 
   // Yarışı çalıştır
   useEffect(() => {
-    if (phase !== "race" || !canvasRef.current || !netRef.current) return;
+    if (phase !== "race" || !canvasRef.current || !glRef.current || !netRef.current) return;
     return runRace({
       canvas: canvasRef.current,
+      glCanvas: glRef.current,
       net: netRef.current,
       roster,
       meId: idRef.current,
@@ -117,7 +154,10 @@ export default function NeonRacing({ onScore, onGameOver }: GameProps) {
           (r.teamPoints[r.myTeam] > r.teamPoints[r.myTeam === "kirmizi" ? "mavi" : "kirmizi"] ? 300 : 0) +
           (r.myFinishMs ? Math.max(0, Math.round(300 - r.myFinishMs / 1000)) : 0);
         cb.current.onScore(score);
-        setTimeout(() => cb.current.onGameOver(score), 6500);
+        setTimeout(() => {
+          exitImmersive();
+          cb.current.onGameOver(score);
+        }, 6500);
       },
     });
   }, [phase, roster]);
@@ -267,16 +307,39 @@ export default function NeonRacing({ onScore, onGameOver }: GameProps) {
       </AnimatePresence>
 
       {(phase === "race" || phase === "results") && (
-        <div className="relative">
-          <canvas ref={canvasRef} className="aspect-[16/10] w-full touch-none rounded-2xl bg-ink-950" />
-          <TouchPad touch={touch} />
-          <AnimatePresence>
-            {phase === "results" && result && (
-              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="absolute inset-0 grid place-items-center rounded-2xl bg-ink-950/85 p-4 backdrop-blur-sm">
-                <Results r={result} meId={idRef.current} />
-              </motion.div>
-            )}
-          </AnimatePresence>
+        <div
+          className={cn(immersive ? "fixed inset-0 z-[100] flex items-center justify-center bg-ink-950" : "relative", "touch-none select-none")}
+          style={{ WebkitTouchCallout: "none" }}
+          onContextMenu={(e) => e.preventDefault()}
+        >
+          <div className="relative w-full" style={immersive ? { width: "min(100vw, 160dvh)" } : undefined}>
+            <div className={cn("relative aspect-[16/10] w-full overflow-hidden bg-ink-950", !immersive && "rounded-2xl")}>
+              <canvas ref={glRef} className="absolute inset-0 h-full w-full touch-none" />
+              <canvas ref={canvasRef} className="pointer-events-none absolute inset-0 h-full w-full" />
+            </div>
+            <AnimatePresence>
+              {phase === "results" && result && (
+                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="absolute inset-0 grid place-items-center overflow-auto rounded-2xl bg-ink-950/85 p-4 backdrop-blur-sm">
+                  <Results r={result} meId={idRef.current} />
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+          {isTouch && phase === "race" && <TouchPad touch={touch} />}
+          {isTouch && (
+            <button
+              onClick={() => (immersive ? exitImmersive() : goImmersive())}
+              className="absolute right-3 top-3 z-10 grid h-10 w-10 place-items-center rounded-xl bg-white/15 text-white backdrop-blur"
+              aria-label={immersive ? "Tam ekrandan çık" : "Tam ekran"}
+            >
+              {immersive ? <Minimize2 className="h-5 w-5" /> : <Maximize2 className="h-5 w-5" />}
+            </button>
+          )}
+          {isTouch && immersive && portrait && phase === "race" && (
+            <div className="pointer-events-none absolute inset-x-4 top-4 rounded-xl bg-ink-900/90 px-4 py-3 text-center text-sm text-white">
+              📱↻ Daha rahat oynamak için telefonunu <b>yan çevir</b>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -326,27 +389,36 @@ function Stat({ label, v }: { label: string; v: number }) {
 }
 
 function TouchPad({ touch }: { touch: React.MutableRefObject<TouchInput> }) {
+  // Mobilde gaz otomatik; ▼ fren/geri vites.
+  useEffect(() => {
+    const t = touch.current;
+    t.up = true;
+    return () => {
+      t.up = false;
+    };
+  }, [touch]);
   const bind = (k: keyof TouchInput) => ({
     onPointerDown: (e: React.PointerEvent) => {
       e.preventDefault();
+      (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
       touch.current[k] = true;
     },
     onPointerUp: () => (touch.current[k] = false),
-    onPointerLeave: () => (touch.current[k] = false),
     onPointerCancel: () => (touch.current[k] = false),
+    onLostPointerCapture: () => (touch.current[k] = false),
+    onContextMenu: (e: React.MouseEvent) => e.preventDefault(),
   });
-  const btn = "grid h-14 w-14 place-items-center rounded-2xl bg-white/15 text-xl text-white backdrop-blur active:bg-neon-cyan/40";
+  const btn = "grid h-16 w-16 touch-none select-none place-items-center rounded-2xl bg-white/15 text-2xl text-white backdrop-blur active:scale-95 active:bg-neon-cyan/40";
   return (
-    <div className="pointer-events-none absolute inset-x-0 bottom-3 flex justify-between px-3 md:hidden">
-      <div className="pointer-events-auto flex gap-2">
-        <button className={btn} {...bind("left")}>◀</button>
-        <button className={btn} {...bind("right")}>▶</button>
+    <div className="pointer-events-none absolute inset-x-0 bottom-3 z-10 flex items-end justify-between px-3 pb-[env(safe-area-inset-bottom)]">
+      <div className="pointer-events-auto flex gap-3">
+        <button className={btn} {...bind("left")} aria-label="Sol">◀</button>
+        <button className={btn} {...bind("right")} aria-label="Sağ">▶</button>
       </div>
-      <div className="pointer-events-auto flex gap-2">
-        <button className={cn(btn, "bg-neon-pink/40")} {...bind("item")}>🎁</button>
-        <button className={cn(btn, "bg-neon-violet/40")} {...bind("ability")}>✨</button>
-        <button className={btn} {...bind("down")}>▼</button>
-        <button className={cn(btn, "bg-neon-lime/40")} {...bind("up")}>▲</button>
+      <div className="pointer-events-auto grid grid-cols-2 gap-3">
+        <button className={cn(btn, "bg-neon-pink/40")} {...bind("item")} aria-label="Eşya kullan">🎁</button>
+        <button className={cn(btn, "bg-neon-violet/40")} {...bind("ability")} aria-label="Yetenek">✨</button>
+        <button className={cn(btn, "col-span-2 h-12 w-full text-base font-bold")} {...bind("down")} aria-label="Fren">▼ FREN</button>
       </div>
     </div>
   );
