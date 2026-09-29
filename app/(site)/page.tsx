@@ -100,9 +100,9 @@ export default async function Home() {
             title={<>Oyna, rekor kır, <span className="text-gradient">indirim kazan</span></>}
             sub="Tarayıcında anında oynanan ücretsiz mini oyunlar. Çorum liderlik tablosuna adını yazdır, yüksek skora özel indirim kodunu kap!"
           />
-          <div className="grid grid-cols-2 gap-4 sm:gap-6 lg:grid-cols-3 xl:grid-cols-6">
+          <div className="grid grid-cols-2 gap-4 sm:gap-6 lg:grid-cols-4">
             {GAMES.map((g, i) => (
-              <GameCard key={g.slug} g={g} index={i} />
+              <GameCard key={g.slug} g={g} index={i} featured={i === 0} />
             ))}
           </div>
         </div>

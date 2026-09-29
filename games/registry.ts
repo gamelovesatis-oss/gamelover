@@ -10,6 +10,7 @@ export type GameMeta = {
 };
 
 export const GAMES: GameMeta[] = [
+  { slug: "neon-yaris", title: "Neon Arena Yarışı", tagline: "Çok oyunculu takım yarışı: yetenekler, roketler, turbo!", controls: "W/↑ gaz · A/D yön · Boşluk eşya · E yetenek. Mobilde ekran tuşları.", gradient: "from-rose-500 via-fuchsia-600 to-sky-500", emoji: "🏎️", maxScore: 3000, rewardFactor: 2 },
   { slug: "uzay-savasi", title: "Uzay Savaşı", tagline: "Galaksiyi istilacılardan koru!", controls: "Fare / parmak ile hareket et, ateş otomatik.", gradient: "from-indigo-600 via-violet-600 to-fuchsia-600", emoji: "🚀", maxScore: 200000, rewardFactor: 4 },
   { slug: "neon-yilan", title: "Neon Yılan", tagline: "Klasik yılan, neon ışıklar altında.", controls: "Yön tuşları / WASD veya kaydır.", gradient: "from-emerald-500 via-teal-500 to-cyan-500", emoji: "🐍", maxScore: 50000, rewardFactor: 0.4 },
   { slug: "2048", title: "2048", tagline: "Sayıları birleştir, 2048'e ulaş.", controls: "Yön tuşları veya kaydır.", gradient: "from-amber-500 via-orange-500 to-rose-500", emoji: "🔢", maxScore: 1000000, rewardFactor: 4 },

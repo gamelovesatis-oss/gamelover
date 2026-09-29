@@ -16,6 +16,7 @@ const Loading = () => (
 );
 
 const COMPONENTS: Record<string, React.ComponentType<GameProps>> = {
+  "neon-yaris": dynamic(() => import("@/games/NeonRacing"), { ssr: false, loading: Loading }),
   "neon-yilan": dynamic(() => import("@/games/Snake"), { ssr: false, loading: Loading }),
   "2048": dynamic(() => import("@/games/Game2048"), { ssr: false, loading: Loading }),
   "uzay-savasi": dynamic(() => import("@/games/SpaceShooter"), { ssr: false, loading: Loading }),

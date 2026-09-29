@@ -121,18 +121,24 @@ export function EventCard({ e, index = 0 }: { e: GameEvent; index?: number }) {
   );
 }
 
-export function GameCard({ g, index = 0 }: { g: GameMeta; index?: number }) {
+export function GameCard({ g, index = 0, featured = false }: { g: GameMeta; index?: number; featured?: boolean }) {
   return (
     <motion.div
+      className={featured ? "col-span-2" : undefined}
       initial={{ opacity: 0, scale: 0.85 }}
       whileInView={{ opacity: 1, scale: 1 }}
       viewport={{ once: true }}
       transition={{ duration: 0.5, delay: index * 0.07, type: "spring" }}
     >
       <TiltCard className="rounded-3xl">
-        <Link href={`/oyunlar/${g.slug}`} className={cn("group relative block aspect-[4/5] overflow-hidden rounded-3xl bg-gradient-to-br p-6", g.gradient)}>
+        <Link href={`/oyunlar/${g.slug}`} className={cn("group relative block overflow-hidden rounded-3xl bg-gradient-to-br p-6", featured ? "aspect-[8/5]" : "aspect-[4/5]", g.gradient)}>
           <div className="grid-bg absolute inset-0 opacity-50" />
           <div className="absolute -bottom-10 -right-10 h-48 w-48 rounded-full bg-white/20 blur-3xl transition-all duration-700 group-hover:scale-150" />
+          {featured && (
+            <span className="absolute right-5 top-5 animate-glow rounded-full bg-white px-3 py-1 text-xs font-bold uppercase tracking-wider text-ink-950">
+              Yeni · Çok oyunculu
+            </span>
+          )}
           <motion.div className="relative text-7xl drop-shadow-2xl transition-transform duration-500 group-hover:-rotate-12 group-hover:scale-125">{g.emoji}</motion.div>
           <div className="absolute inset-x-6 bottom-6">
             <h3 className="font-display text-2xl font-bold text-white drop-shadow">{g.title}</h3>

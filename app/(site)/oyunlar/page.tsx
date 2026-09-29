@@ -22,9 +22,9 @@ export default async function GamesPage() {
       <Reveal className="mx-auto mb-12 flex max-w-xl items-center justify-center gap-3 rounded-2xl border border-neon-pink/30 bg-neon-pink/10 px-5 py-3 text-sm text-pink-200">
         <Gift className="h-5 w-5 shrink-0 text-neon-pink" /> Her oyunda yüksek skor = mağazada geçerli indirim kodu 🎁
       </Reveal>
-      <div className="grid grid-cols-2 gap-4 sm:gap-6 lg:grid-cols-3">
+      <div className="grid grid-cols-2 gap-4 sm:gap-6 lg:grid-cols-4">
         {GAMES.map((g, i) => (
-          <GameCard key={g.slug} g={g} index={i} />
+          <GameCard key={g.slug} g={g} index={i} featured={i === 0} />
         ))}
       </div>
       {ads.length > 0 && (
