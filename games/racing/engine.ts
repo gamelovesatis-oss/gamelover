@@ -1,7 +1,7 @@
 import { TRACK_W, dirAt, nearest, type Track } from "@/games/racing/track";
 
 /** Yarış ayarları — tur sayısı oda sahibi tarafından yarış başında belirlenir. */
-export type Mode = "herkes" | "takim";
+export type Mode = "herkes" | "takim" | "drift";
 export const race: { laps: number; mode: Mode } = { laps: 4, mode: "herkes" };
 export const LAP_OPTIONS = [1, 2, 3, 4, 5, 6, 8, 10];
 export type Team = "kirmizi" | "mavi";
@@ -12,11 +12,11 @@ export const TEAM_COLOR: Record<Team, string> = { kirmizi: "#f43f5e", mavi: "#38
 export const TEAM_NAME: Record<Team, string> = { kirmizi: "Kırmızı", mavi: "Mavi" };
 /** Herkes Tek modunda her araca ayrı renk. */
 export const FFA_COLORS = ["#f43f5e", "#38bdf8", "#a3e635", "#fbbf24", "#c084fc", "#fb923c", "#2dd4bf", "#f472b6"];
-export const MODE_NAME: Record<Mode, string> = { herkes: "Herkes Tek", takim: "Takım" };
+export const MODE_NAME: Record<Mode, string> = { herkes: "Herkes Tek", takim: "Takım", drift: "Drift" };
 
 /** a ile b rakip mi? Herkes Tek modunda herkes herkese rakiptir. */
 export const isRival = (a: { id: string; team: Team }, b: { id: string; team: Team }) =>
-  a.id !== b.id && (race.mode === "herkes" || a.team !== b.team);
+  race.mode !== "drift" && a.id !== b.id && (race.mode === "herkes" || a.team !== b.team);
 export const colorOf = (c: { team: Team; color?: string }) => c.color ?? TEAM_COLOR[c.team];
 
 export const CAR_TYPES: Record<CarType, { name: string; ability: string; desc: string; max: number; acc: number; turn: number; grip: number; cd: number }> = {
@@ -60,6 +60,13 @@ export type Car = {
   quitAt: number | null; // "Yarışı Bitir"e basış zamanı
   botUseAt: number;
   drift: number;
+  // Drift modu
+  driftScore: number; // kasaya giren puan
+  combo: number; // devam eden drift'in ham puanı
+  comboTime: number; // kombonun süresi (kare)
+  comboIdle: number; // drift bittikten sonra geçen süre (kare)
+  lastBank: number; // son kasaya giren puan (arayüz bildirimi için)
+  comboLost: boolean; // son karede kombo kırıldı mı
 };
 
 export type Missile = { id: string; owner: string; team: Team; x: number; y: number; a: number; target: string | null; until: number };
@@ -92,6 +99,12 @@ export function makeCar(p: { id: string; name: string; team: Team; type: CarType
     quitAt: null,
     botUseAt: 0,
     drift: 0,
+    driftScore: 0,
+    combo: 0,
+    comboTime: 0,
+    comboIdle: 0,
+    lastBank: 0,
+    comboLost: false,
   };
 }
 
@@ -105,6 +118,7 @@ export function ranking(t: Track, cars: Car[]) {
       if (b.quitAt == null) return 1;
       return b.quitAt - a.quitAt; // sonra bitiren, önce bitirenin önünde
     }
+    if (race.mode === "drift") return b.driftScore - a.driftScore; // drift: en çok puan kazanır
     if (a.finishMs != null && b.finishMs != null) return a.finishMs - b.finishMs;
     if (a.finishMs != null) return -1;
     if (b.finishMs != null) return 1;
@@ -115,44 +129,52 @@ export function ranking(t: Track, cars: Car[]) {
 /** Tek bir aracı dt kadar ilerletir. Tur ve bitiş bilgisini günceller. */
 export function stepCar(t: Track, c: Car, inp: Input, now: number, dt: number, raceMs: number) {
   const spec = CAR_TYPES[c.type];
+  const { idx, dist } = nearest(t, c.x, c.y, c.idx);
+  const offroad = dist > TRACK_W / 2;
+  const driftMode = race.mode === "drift";
+  const steer = inp.steer ?? (inp.left ? -1 : 0) + (inp.right ? 1 : 0);
+  const spinning = now < c.spinUntil;
+
+  // 1) Önce yön değişir; hız dünyada sabit kalır → yeni yöne göre yana kayma oluşur.
+  const oldFwd = c.vx * Math.cos(c.a) + c.vy * Math.sin(c.a);
+  if (spinning) c.a += 0.28 * dt;
+  else c.a += steer * spec.turn * dt * Math.min(1, Math.abs(oldFwd) / 2.5) * Math.sign(oldFwd || 1);
   const fx = Math.cos(c.a),
     fy = Math.sin(c.a);
   let fwd = c.vx * fx + c.vy * fy;
   let lat = -c.vx * fy + c.vy * fx;
 
-  const { idx, dist } = nearest(t, c.x, c.y, c.idx);
-  const offroad = dist > TRACK_W / 2;
-
-  if (now < c.spinUntil) {
-    c.a += 0.28 * dt;
+  if (spinning) {
     fwd *= Math.pow(0.93, dt);
     lat *= Math.pow(0.9, dt);
   } else {
-    const steer = inp.steer ?? (inp.left ? -1 : 0) + (inp.right ? 1 : 0);
-    c.a += steer * spec.turn * dt * Math.min(1, Math.abs(fwd) / 2.5) * Math.sign(fwd || 1);
     let max = spec.max * c.skill;
     if (now < c.boostUntil) max *= 1.5;
     if (now < c.slowUntil) max *= 0.55;
     if (offroad) max *= 0.5;
+    const handbrake = driftMode && inp.down && fwd > 4; // drift modunda hızlıyken FREN = el freni
     if (inp.up) fwd += spec.acc * (now < c.boostUntil ? 1.8 : 1) * dt;
+    else if (handbrake) fwd -= 0.08 * dt;
     else if (inp.down) fwd -= (fwd > 0 ? 0.35 : 0.12) * dt;
     else fwd *= Math.pow(0.985, dt);
     if (fwd > max) fwd = Math.max(max, fwd - 0.25 * dt); // turbo bitince yavaşça düş
     fwd = Math.max(-3, fwd);
-    lat *= Math.pow(spec.grip - (Math.abs(steer) > 0.4 && Math.abs(fwd) > 6 ? 0.06 : 0), dt);
+    // 2) Lastik tutuşu yana kaymayı söndürür (drift modunda daha az)
+    let grip = spec.grip - (Math.abs(steer) > 0.4 && Math.abs(fwd) > 6 ? 0.04 : 0);
+    if (driftMode) grip = handbrake ? 0.965 : grip + 0.02;
+    lat *= Math.pow(Math.min(0.98, grip), dt);
   }
   c.drift = Math.abs(lat);
-  const nfx = Math.cos(c.a),
-    nfy = Math.sin(c.a);
-  c.vx = nfx * fwd - nfy * lat;
-  c.vy = nfy * fwd + nfx * lat;
+  c.vx = fx * fwd - fy * lat;
+  c.vy = fy * fwd + fx * lat;
   c.x += c.vx * dt;
   c.y += c.vy * dt;
 
   // Duvar: pistin çok dışına çıkmayı engelle
   const limit = TRACK_W / 2 + 55;
   const n2 = nearest(t, c.x, c.y, idx);
-  if (n2.dist > limit) {
+  const hitWall = n2.dist > limit;
+  if (hitWall) {
     const p = t.pts[n2.idx];
     const ox = (c.x - p.x) / n2.dist,
       oy = (c.y - p.y) / n2.dist;
@@ -168,6 +190,38 @@ export function stepCar(t: Track, c: Car, inp: Input, now: number, dt: number, r
   }
 
   updateLap(t, c, n2.idx, raceMs);
+  // Duvara çarpmak komboyu kırar; pistin dışındayken (çim) puan birikmez.
+  if (race.mode === "drift") scoreDrift(c, dt, now, hitWall, n2.dist > TRACK_W / 2 + 20);
+}
+
+/** Drift puanlama: kayma × hız biriktirilir, süre uzadıkça çarpan artar; duvar/çim/savrulma komboyu kırar. */
+export const comboMult = (c: Car) => 1 + Math.min(4, Math.floor(c.comboTime / 90));
+function scoreDrift(c: Car, dt: number, now: number, crash: boolean, onGrass: boolean) {
+  c.comboLost = false;
+  if (c.finishMs != null || c.quitAt != null) return;
+  if (c.combo > 0 && (crash || now < c.spinUntil)) {
+    c.combo = 0;
+    c.comboTime = 0;
+    c.comboIdle = 0;
+    c.comboLost = true;
+    return;
+  }
+  const speed = Math.hypot(c.vx, c.vy);
+  if (c.drift > 1.2 && speed > 4 && !onGrass) {
+    c.combo += c.drift * speed * 0.18 * dt;
+    c.comboTime += dt;
+    c.comboIdle = 0;
+  } else if (c.combo > 0) {
+    c.comboIdle += dt;
+    if (c.comboIdle > 36) {
+      const pts = Math.round(c.combo * comboMult(c));
+      c.driftScore += pts;
+      c.lastBank = pts;
+      c.combo = 0;
+      c.comboTime = 0;
+      c.comboIdle = 0;
+    }
+  }
 }
 
 function updateLap(t: Track, c: Car, idx: number, raceMs: number) {
@@ -273,6 +327,9 @@ export function botInput(t: Track, c: Car): Input {
   let diff = Math.atan2(ty - c.y, tx - c.x) - c.a;
   while (diff > Math.PI) diff -= Math.PI * 2;
   while (diff < -Math.PI) diff += Math.PI * 2;
+  if (race.mode === "drift" && Math.abs(diff) > 0.3 && speed > 6.5)
+    // Drift modunda botlar virajlara el freniyle kayarak girer
+    return { up: false, down: true, left: diff < -0.06, right: diff > 0.06 };
   return { up: Math.abs(diff) < 1.1 || speed < 3, down: Math.abs(diff) > 1.1 && speed > 5, left: diff < -0.06, right: diff > 0.06 };
 }
 

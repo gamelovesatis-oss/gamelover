@@ -42,7 +42,36 @@ function loadApi(): Promise<YTNamespace> {
   return apiPromise;
 }
 
-export function YouTubeDock({ muted, className, onError }: { muted: boolean; className?: string; onError?: (msg: string) => void }) {
+export type YTVideo = { id: string; title: string };
+
+/** Link ya da ID'den YouTube video kimliğini çıkarır. */
+export function parseYouTubeId(input: string) {
+  const s = input.trim();
+  const m = s.match(/(?:v=|youtu\.be\/|shorts\/|embed\/|live\/)([A-Za-z0-9_-]{11})/) ?? s.match(/^([A-Za-z0-9_-]{11})$/);
+  return m ? m[1] : null;
+}
+
+export async function fetchYouTubeTitle(id: string) {
+  try {
+    const r = await fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${id}&format=json`);
+    if (!r.ok) return null;
+    return ((await r.json()) as { title?: string }).title ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export function YouTubeDock({
+  videos = YT_PLAYLIST,
+  muted,
+  className,
+  onError,
+}: {
+  videos?: YTVideo[];
+  muted: boolean;
+  className?: string;
+  onError?: (msg: string) => void;
+}) {
   const host = useRef<HTMLDivElement>(null);
   const player = useRef<YTPlayer | null>(null);
   const [status, setStatus] = useState("Yükleniyor…");
@@ -56,12 +85,12 @@ export function YouTubeDock({ muted, className, onError }: { muted: boolean; cla
       player.current = new YT.Player(el, {
         width: "200",
         height: "200",
-        videoId: YT_PLAYLIST[0].id,
+        videoId: videos[0].id,
         playerVars: {
           autoplay: 1,
           playsinline: 1,
           loop: 1,
-          playlist: YT_PLAYLIST.map((v) => v.id).join(","),
+          playlist: videos.map((v) => v.id).join(","),
           modestbranding: 1,
           rel: 0,
         },

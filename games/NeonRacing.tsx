@@ -5,7 +5,7 @@ import { Bot, Check, Copy, Crown, Flag, Loader2, Maximize2, Minimize2, Music, Us
 import { useEffect, useRef, useState } from "react";
 import type { GameProps } from "@/games/hooks";
 import { raceAudio, type MusicSource } from "@/games/racing/audio";
-import { YouTubeDock } from "@/games/racing/YouTubeDock";
+import { YT_PLAYLIST, YouTubeDock, fetchYouTubeTitle, parseYouTubeId, type YTVideo } from "@/games/racing/YouTubeDock";
 import { CAR_TYPES, LAP_OPTIONS, MODE_NAME, TEAM_COLOR, TEAM_NAME, type CarType, type Mode, type Team } from "@/games/racing/engine";
 import { enterFullscreenLandscape, exitFullscreen } from "@/games/racing/fullscreen";
 import { RaceNet, type Player } from "@/games/racing/net";
@@ -42,6 +42,7 @@ export default function NeonRacing({ onScore, onGameOver }: GameProps) {
   const [muted, setMuted] = useState(false);
   const [confirmQuit, setConfirmQuit] = useState(false);
   const [musicSrc, setMusicSrc] = useState<MusicSource>("phonk");
+  const [ytList, setYtList] = useState<YTVideo[]>([]);
   const netRef = useRef<RaceNet | null>(null);
   const idRef = useRef(newId());
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -58,6 +59,10 @@ export default function NeonRacing({ onScore, onGameOver }: GameProps) {
     if (coarse) setImmersive(true);
     setMuted(raceAudio().muted);
     setMusicSrc(raceAudio().source);
+    try {
+      const saved = JSON.parse(localStorage.getItem("gl-yt-list") ?? "[]") as YTVideo[];
+      if (Array.isArray(saved)) setYtList(saved.filter((v) => v && typeof v.id === "string"));
+    } catch {}
     const onResize = () => setDims({ w: window.innerWidth, h: window.innerHeight });
     onResize();
     window.addEventListener("resize", onResize);
@@ -161,8 +166,8 @@ export default function NeonRacing({ onScore, onGameOver }: GameProps) {
   }
 
   useEffect(() => {
-    touch.current.hideRank = isTouch && musicSrc === "youtube";
-  }, [isTouch, musicSrc]);
+    touch.current.hideRank = isTouch && (musicSrc === "youtube" || (musicSrc === "ytlist" && ytList.length > 0));
+  }, [isTouch, musicSrc, ytList.length]);
 
   // Yarışı çalıştır. Sonuç ekranında da arkada sürer: oda sahibi botları yönetmeye devam eder.
   useEffect(() => {
@@ -182,10 +187,13 @@ export default function NeonRacing({ onScore, onGameOver }: GameProps) {
         setPhase("results");
         const other: Team = r.myTeam === "kirmizi" ? "mavi" : "kirmizi";
         const teamWin = r.mode === "takim" && r.teamPoints[r.myTeam] > r.teamPoints[other];
-        const score = (RANK_SCORE[r.myRank] ?? 50) + (teamWin ? 300 : 0) + (r.myFinishMs ? Math.max(0, Math.round(300 - r.myFinishMs / 1000)) : 0);
+        const myDrift = r.order.find((c) => c.id === idRef.current)?.driftScore ?? 0;
+        const bonus = r.mode === "drift" ? Math.min(600, Math.round(myDrift / 50)) : r.myFinishMs ? Math.max(0, Math.round(300 - r.myFinishMs / 1000)) : 0;
+        const score = (RANK_SCORE[r.myRank] ?? 50) + (teamWin ? 300 : 0) + bonus;
         cb.current.onScore(score);
         setTimeout(() => {
           exitImmersive();
+          raceAudio().stopMusic(); // oyun bitti: müzik de sussun
           cb.current.onGameOver(score);
         }, 6500);
       },
@@ -217,6 +225,8 @@ export default function NeonRacing({ onScore, onGameOver }: GameProps) {
       : { position: "fixed", inset: 0 }
     : undefined;
   const racing = phase === "race" || phase === "results";
+  // Hangi YouTube listesi çalınacak (yoksa null: phonk ya da dosya çalar)
+  const dockVideos: YTVideo[] | null = musicSrc === "youtube" ? YT_PLAYLIST : musicSrc === "ytlist" && ytList.length ? ytList : null;
 
   return (
     <div className={cn("select-none", immersive ? "z-[100] overflow-y-auto overscroll-contain bg-ink-950" : "relative mx-auto w-full")} style={rootStyle}>
@@ -292,8 +302,8 @@ export default function NeonRacing({ onScore, onGameOver }: GameProps) {
               <div className="grid gap-4 sm:grid-cols-2">
                 <div>
                   <label className="label">Oyun modu</label>
-                  <div className="grid grid-cols-2 gap-2">
-                    {(["herkes", "takim"] as Mode[]).map((m) => (
+                  <div className="grid grid-cols-3 gap-2">
+                    {(["herkes", "takim", "drift"] as Mode[]).map((m) => (
                       <button
                         key={m}
                         disabled={!isHost}
@@ -303,8 +313,8 @@ export default function NeonRacing({ onScore, onGameOver }: GameProps) {
                           shownMode === m ? "border-neon-cyan bg-neon-cyan/10 text-white" : "border-white/10 text-slate-400",
                         )}
                       >
-                        <div className="font-bold">{m === "herkes" ? "🎯 Herkes Tek" : "🤝 Takım"}</div>
-                        <div className="text-[11px] opacity-70">{m === "herkes" ? "Herkes herkese saldırır" : "Kırmızı 🆚 Mavi"}</div>
+                        <div className="font-bold">{m === "herkes" ? "🎯 Herkes Tek" : m === "takim" ? "🤝 Takım" : "💨 Drift"}</div>
+                        <div className="text-[11px] opacity-70">{m === "herkes" ? "Herkes herkese saldırır" : m === "takim" ? "Kırmızı 🆚 Mavi" : "En çok drift puanı kazanır"}</div>
                       </button>
                     ))}
                   </div>
@@ -357,7 +367,17 @@ export default function NeonRacing({ onScore, onGameOver }: GameProps) {
 
               <CarPicker value={type} onChange={(v) => change({ type: v })} compact />
 
-              <MusicPicker source={musicSrc} onSource={setMusicSrc} />
+              <MusicPicker
+                source={musicSrc}
+                onSource={setMusicSrc}
+                ytList={ytList}
+                onYtList={(l) => {
+                  setYtList(l);
+                  try {
+                    localStorage.setItem("gl-yt-list", JSON.stringify(l));
+                  } catch {}
+                }}
+              />
 
               {isHost ? (
                 <div className="flex flex-wrap items-center gap-3">
@@ -385,8 +405,10 @@ export default function NeonRacing({ onScore, onGameOver }: GameProps) {
         </AnimatePresence>
       </div>
 
-      {musicSrc === "youtube" && phase !== "menu" && phase !== "connecting" && (
+      {dockVideos && phase !== "menu" && phase !== "connecting" && (
         <YouTubeDock
+          key={dockVideos.map((v) => v.id).join(",")}
+          videos={dockVideos}
           muted={muted}
           className={cn(
             racing ? (isTouch ? "absolute left-2 top-2" : "absolute bottom-3 left-3") : "mx-auto my-4",
@@ -463,16 +485,28 @@ export default function NeonRacing({ onScore, onGameOver }: GameProps) {
   );
 }
 
-/** Müzik seçimi: üretilen drift phonk, YouTube'dan resmi klipler ya da oyuncunun kendi dosyası. */
-function MusicPicker({ source, onSource }: { source: MusicSource; onSource: (s: MusicSource) => void }) {
-  const [current, setCurrent] = useState<string | null>(null);
+/** Müzik seçimi: Tokyo Drift listesi, YouTube'dan istenen şarkılar, üretilen drift phonk ya da cihazdaki dosya. */
+function MusicPicker({
+  source,
+  onSource,
+  ytList,
+  onYtList,
+}: {
+  source: MusicSource;
+  onSource: (s: MusicSource) => void;
+  ytList: YTVideo[];
+  onYtList: (l: YTVideo[]) => void;
+}) {
+  const [fileName, setFileName] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [link, setLink] = useState("");
+  const [err, setErr] = useState("");
   const input = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     raceAudio()
       .loadSaved()
-      .then((n) => setCurrent(n));
+      .then((n) => setFileName(n));
   }, []);
 
   function choose(s: MusicSource) {
@@ -480,17 +514,30 @@ function MusicPicker({ source, onSource }: { source: MusicSource; onSource: (s: 
     onSource(s);
   }
 
-  async function pick(file: File) {
+  async function pickFile(file: File) {
     setBusy(true);
     await raceAudio().setCustom(file);
-    setCurrent(raceAudio().customName);
+    setFileName(raceAudio().customName);
     choose("custom");
     setBusy(false);
   }
 
-  const opt = (s: MusicSource, label: string, sub: string, onClick?: () => void) => (
+  async function addLink() {
+    const id = parseYouTubeId(link);
+    if (!id) return setErr("Geçerli bir YouTube linki yapıştır.");
+    if (ytList.some((v) => v.id === id)) return setErr("Bu şarkı zaten listede.");
+    setBusy(true);
+    setErr("");
+    const title = (await fetchYouTubeTitle(id)) ?? `YouTube videosu (${id})`;
+    onYtList([...ytList, { id, title }].slice(0, 25));
+    setLink("");
+    choose("ytlist");
+    setBusy(false);
+  }
+
+  const opt = (s: MusicSource, label: string, sub: string) => (
     <button
-      onClick={onClick ?? (() => choose(s))}
+      onClick={() => choose(s)}
       disabled={busy}
       className={cn("rounded-xl border-2 px-3 py-2 text-left text-sm transition", source === s ? "border-neon-pink bg-neon-pink/10 text-white" : "border-white/10 text-slate-400")}
     >
@@ -506,13 +553,55 @@ function MusicPicker({ source, onSource }: { source: MusicSource; onSource: (s: 
       </div>
       <div className="grid gap-2 sm:grid-cols-3">
         {opt("youtube", "🎬 Tokyo Drift + We Own It", "YouTube resmi klipler")}
+        {opt("ytlist", "▶️ YouTube'dan seç", ytList.length ? `${ytList.length} şarkı` : "İstediğin şarkıyı ekle")}
         {opt("phonk", "🔥 Drift Phonk", "Oyuna özel")}
-        {opt(
-          "custom",
-          current ? `🎵 ${current}` : "📁 Kendi şarkın",
-          current ? "Değiştirmek için tekrar dokun" : "Cihazından seç",
-          () => (current && source !== "custom" ? choose("custom") : input.current?.click()),
-        )}
+      </div>
+
+      {source === "ytlist" && (
+        <div className="mt-3 space-y-2">
+          <div className="flex gap-2">
+            <input
+              value={link}
+              onChange={(e) => setLink(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && void addLink()}
+              placeholder="YouTube linkini yapıştır (youtube.com/watch?v=… veya youtu.be/…)"
+              className="input py-2 text-sm"
+            />
+            <button onClick={() => void addLink()} disabled={busy || !link.trim()} className="btn-primary shrink-0 px-4 py-2 text-sm">
+              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Ekle"}
+            </button>
+          </div>
+          {err && <p className="text-xs text-red-400">{err}</p>}
+          {ytList.length === 0 ? (
+            <p className="text-xs text-slate-500">YouTube&apos;da şarkıyı aç, &quot;Paylaş → Kopyala&quot; ile linki al ve buraya yapıştır. Eklediğin şarkılar sırayla çalar.</p>
+          ) : (
+            <ol className="space-y-1">
+              {ytList.map((v, i) => (
+                <li key={v.id} className="flex items-center gap-2 rounded-lg bg-white/5 px-3 py-1.5 text-sm text-white">
+                  <span className="w-5 text-xs text-slate-500">{i + 1}.</span>
+                  <span className="flex-1 truncate">{v.title}</span>
+                  <button
+                    onClick={() => onYtList(ytList.filter((x) => x.id !== v.id))}
+                    className="grid h-6 w-6 place-items-center rounded text-slate-400 hover:bg-white/10 hover:text-white"
+                    aria-label="Kaldır"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </li>
+              ))}
+            </ol>
+          )}
+        </div>
+      )}
+
+      <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
+        {(source === "youtube" || source === "ytlist") && <span>Şarkılar köşedeki YouTube oynatıcısında çalar.</span>}
+        <button
+          onClick={() => (fileName && source !== "custom" ? choose("custom") : input.current?.click())}
+          className={cn("underline", source === "custom" && "text-neon-pink")}
+        >
+          {source === "custom" && fileName ? `📁 ${fileName} çalıyor · değiştir` : fileName ? `📁 ${fileName}` : "📁 veya cihazından dosya seç"}
+        </button>
       </div>
       <input
         ref={input}
@@ -521,11 +610,10 @@ function MusicPicker({ source, onSource }: { source: MusicSource; onSource: (s: 
         className="hidden"
         onChange={(e) => {
           const f = e.target.files?.[0];
-          if (f) void pick(f);
+          if (f) void pickFile(f);
           e.target.value = "";
         }}
       />
-      {source === "youtube" && <p className="mt-2 text-[11px] text-slate-500">Klipler YouTube oynatıcısında çalar; oynatıcı ekranın köşesinde görünür kalır.</p>}
     </div>
   );
 }
@@ -756,7 +844,7 @@ function Results({ r, meId }: { r: RaceResult; meId: string }) {
           </>
         ) : (
           <div className="font-display text-3xl font-bold" style={{ color: first?.color }}>
-            {iQuit ? "Sıralama şimdilik böyle" : `🏆 ${first?.name} kazandı!`}
+            {iQuit ? "Sıralama şimdilik böyle" : r.mode === "drift" ? `💨 ${first?.name} drift kralı!` : `🏆 ${first?.name} kazandı!`}
           </div>
         )}
       </div>
@@ -766,7 +854,7 @@ function Results({ r, meId }: { r: RaceResult; meId: string }) {
             <span className="w-6 font-display font-bold text-white">{i + 1}.</span>
             <span className="h-3 w-3 rounded-full" style={{ background: c.color }} />
             <span className="flex-1 truncate text-white">{c.name}</span>
-            <span className="font-mono text-xs text-slate-400">{c.quit ? "🏳️ bitirdi" : c.finishMs != null ? fmtTime(c.finishMs) : "—"}</span>
+            <span className="font-mono text-xs text-slate-400">{c.quit ? "🏳️ bitirdi" : r.mode === "drift" ? `${c.driftScore.toLocaleString("tr-TR")} puan` : c.finishMs != null ? fmtTime(c.finishMs) : "—"}</span>
             <span className="w-10 text-right font-bold text-neon-cyan">+{POINTS[i] ?? 0}</span>
           </li>
         ))}

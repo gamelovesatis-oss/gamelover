@@ -1,4 +1,4 @@
-import { CAR_TYPES, ITEM_INFO, colorOf, race, type Car } from "@/games/racing/engine";
+import { CAR_TYPES, ITEM_INFO, colorOf, comboMult, race, type Car } from "@/games/racing/engine";
 import { WORLD_H, WORLD_W, type Track } from "@/games/racing/track";
 
 export const VIEW_W = 960;
@@ -73,6 +73,24 @@ export function drawHud(g: CanvasRenderingContext2D, me: Car, rank: number, tota
   g.font = "bold 16px monospace";
   g.fillText(fmtTime(raceMs), 230, 62);
 
+  if (race.mode === "drift") {
+    // Drift puanı ve kombo
+    panel(VIEW_W / 2 - 110, 14, 220, 76);
+    g.textAlign = "center";
+    g.fillStyle = "#94a3b8";
+    g.font = "11px sans-serif";
+    g.fillText("DRIFT PUANI", VIEW_W / 2, 32);
+    g.fillStyle = "#fff";
+    g.font = "bold 28px sans-serif";
+    g.fillText(me.driftScore.toLocaleString("tr-TR"), VIEW_W / 2, 62);
+    if (me.combo > 0) {
+      const m = comboMult(me);
+      g.font = "bold 16px sans-serif";
+      g.fillStyle = m >= 4 ? "#f472b6" : m >= 2 ? "#fbbf24" : "#22d3ee";
+      g.fillText(`+${Math.round(me.combo).toLocaleString("tr-TR")}  ×${m}`, VIEW_W / 2, 84);
+    }
+    g.textAlign = "left";
+  } else {
   // Eşya kutusu
   panel(VIEW_W / 2 - 38, 14, 76, 76);
   g.strokeStyle = me.item ? "#f472b6" : "rgba(255,255,255,0.15)";
@@ -86,6 +104,7 @@ export function drawHud(g: CanvasRenderingContext2D, me: Car, rank: number, tota
   g.font = "10px sans-serif";
   g.fillStyle = "#94a3b8";
   g.fillText(me.item ? "BOŞLUK" : "EŞYA", VIEW_W / 2, 104);
+  }
 
   // Yetenek
   const spec = CAR_TYPES[me.type];

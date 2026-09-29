@@ -34,7 +34,7 @@ import { buildTrack, gridSlot } from "@/games/racing/track";
 
 export type RosterEntry = { id: string; name: string; team: Team; type: CarType; bot: boolean; skill?: number };
 export type RaceResult = {
-  order: { id: string; name: string; team: Team; color: string; bot: boolean; finishMs: number | null; quit: boolean }[];
+  order: { id: string; name: string; team: Team; color: string; bot: boolean; finishMs: number | null; quit: boolean; driftScore: number }[];
   teamPoints: Record<Team, number>;
   myRank: number;
   myTeam: Team;
@@ -79,7 +79,7 @@ export function runRace(opts: {
   const byId = new Map(cars.map((c) => [c.id, c]));
   const me = byId.get(meId)!;
   const targets = new Map<string, { x: number; y: number; a: number; vx: number; vy: number }>();
-  const boxesAt = track.boxes.map(() => 0);
+  const boxesAt = track.boxes.map(() => (opts.mode === "drift" ? Infinity : 0)); // drift modunda eşya yok
   let missiles: (Missile & { until: number })[] = [];
   let oils: Oil[] = [];
   const parts: Particle[] = [];
@@ -92,6 +92,7 @@ export function runRace(opts: {
   let raf = 0;
   let ended = false;
   let reported = false;
+  let audioOff = false;
   let firstFinishAt: number | null = null;
   const scene = new Scene3D(glCanvas, track, cars, meId, hq);
   const ro = new ResizeObserver(() => scene.resize());
@@ -107,7 +108,7 @@ export function runRace(opts: {
     for (const e of p.c) {
       const c = byId.get(e[0] as string);
       if (!c || owned(c)) continue;
-      const [, x, y, a, vx, vy, lap, idx, fin, sh, sp, bo, sl] = e as number[];
+      const [, x, y, a, vx, vy, lap, idx, fin, sh, sp, bo, sl, , ds, cb] = e as number[];
       targets.set(c.id, { x, y, a, vx, vy });
       c.lap = lap;
       c.idx = idx;
@@ -116,6 +117,8 @@ export function runRace(opts: {
       c.spinUntil = now + sp;
       c.boostUntil = now + bo;
       c.slowUntil = now + sl;
+      if (ds != null) c.driftScore = ds;
+      if (cb != null) c.combo = cb;
     }
   });
   net.on("box", (p: { i: number; ttl: number }) => (boxesAt[p.i] = performance.now() + p.ttl));
@@ -178,6 +181,7 @@ export function runRace(opts: {
       c.boostUntil = now + 1100;
       burst(parts, c.x, c.y, "#fbbf24", 16);
     } else if (c.type === "tank") c.shieldUntil = now + 3200;
+    else if (race.mode === "drift") c.boostUntil = now + 1100; // drift modunda saldırı yok
     else fire(c);
   }
   function hit(c: Car, x: number, y: number) {
@@ -249,12 +253,15 @@ export function runRace(opts: {
   function report(order: Car[], delay: number) {
     if (reported) return;
     reported = true;
+    // Yarış bitti: motor ve lastik sesi sussun (oyun arkada sürse de uğultu kalmasın)
+    audioOff = true;
+    sfx.stopEngine();
     const teamPoints: Record<Team, number> = { kirmizi: 0, mavi: 0 };
     order.forEach((c, i) => (teamPoints[c.team] += POINTS[i] ?? 0));
     setTimeout(
       () =>
         onEnd({
-          order: order.map((c) => ({ id: c.id, name: c.name, team: c.team, color: colorOf(c), bot: c.bot, finishMs: c.finishMs, quit: c.quitAt != null })),
+          order: order.map((c) => ({ id: c.id, name: c.name, team: c.team, color: colorOf(c), bot: c.bot, finishMs: c.finishMs, quit: c.quitAt != null, driftScore: c.driftScore })),
           teamPoints,
           myRank: order.findIndex((c) => c.id === meId),
           myTeam: me.team,
@@ -289,7 +296,15 @@ export function runRace(opts: {
         const lapBefore = c.lap;
         stepCar(track, c, inp, now, dt, raceMs);
         collideCars(c, cars);
-        if (c.bot) botThink(c, now);
+        if (c.bot && race.mode !== "drift") botThink(c, now);
+        if (c === me && race.mode === "drift") {
+          if (c.lastBank) {
+            say(`🔥 +${c.lastBank.toLocaleString("tr-TR")} DRIFT!`, 1400);
+            if (c.lastBank > 1500) sfx.pickup();
+          }
+          if (c.comboLost) say("💥 Kombo kırıldı!", 1200);
+        }
+        c.lastBank = 0;
         if (c === me && c.lap > lapBefore && c.lap > 1 && c.finishMs == null) {
           say(c.lap === race.laps ? "🏁 SON TUR!" : `Tur ${c.lap}`);
           sfx.lap();
@@ -371,7 +386,7 @@ export function runRace(opts: {
         net.send("s", {
           c: cars
             .filter(owned)
-            .map((c) => [c.id, r(c.x), r(c.y), Math.round(c.a * 100) / 100, r(c.vx), r(c.vy), c.lap, c.idx, c.finishMs ?? -1, rem(c.shieldUntil), rem(c.spinUntil), rem(c.boostUntil), rem(c.slowUntil), c.item ? ITEMS.indexOf(c.item) : -1]),
+            .map((c) => [c.id, r(c.x), r(c.y), Math.round(c.a * 100) / 100, r(c.vx), r(c.vy), c.lap, c.idx, c.finishMs ?? -1, rem(c.shieldUntil), rem(c.spinUntil), rem(c.boostUntil), rem(c.slowUntil), c.item ? ITEMS.indexOf(c.item) : -1, c.driftScore, Math.round(c.combo)]),
         });
       }
 
@@ -399,10 +414,10 @@ export function runRace(opts: {
       sfx.beep(true);
     }
     const mySpeed = Math.hypot(me.vx, me.vy);
-    sfx.setEngine(me.quitAt != null ? 0 : Math.min(1, mySpeed / 11), now < me.boostUntil);
+    if (!audioOff) sfx.setEngine(me.quitAt != null ? 0 : Math.min(1, mySpeed / 11), now < me.boostUntil);
     // Lastik ötmesi: yan kayarken veya savrulurken
     const skid = now < me.spinUntil ? 1 : mySpeed > 3.5 ? Math.min(1, Math.max(0, (me.drift - 1.1) / 2.5)) : 0;
-    sfx.setDrift(started && !ended ? skid : 0);
+    if (!audioOff) sfx.setDrift(started && !ended ? skid : 0);
 
     // ---------- Çizim ----------
     scene.update({ now, dt, cars, boxesAt, missiles, oils, parts, countdownMs: Math.max(0, startAt - now) });
@@ -420,7 +435,7 @@ export function runRace(opts: {
       g.fillStyle = colorOf(c);
       g.fillRect(14, y - 14, 4, 18);
       g.fillStyle = "#fff";
-      g.fillText(`${i + 1}. ${c.name}${c.finishMs != null ? " 🏁" : ""}`, 24, y);
+      g.fillText(`${i + 1}. ${c.name}${race.mode === "drift" ? ` · ${c.driftScore.toLocaleString("tr-TR")}` : ""}${c.finishMs != null ? " 🏁" : ""}`, 24, y);
     });
 
     if (!started) {

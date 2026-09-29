@@ -31,7 +31,7 @@ const KICKS = [
 ];
 
 // ---------- Oyuncunun kendi şarkısı (cihazda IndexedDB'de saklanır, siteye yüklenmez) ----------
-export type MusicSource = "phonk" | "custom" | "youtube";
+export type MusicSource = "phonk" | "custom" | "youtube" | "ytlist";
 const DB = "gl-racing";
 function idb<T>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRequest): Promise<T | undefined> {
   return new Promise((resolve) => {
@@ -94,7 +94,7 @@ class RaceAudio {
     try {
       this.muted = localStorage.getItem("gl-muted") === "1";
       const s = localStorage.getItem("gl-music-src") as MusicSource | null;
-      if (s === "phonk" || s === "custom" || s === "youtube") this.source = s;
+      if (s === "phonk" || s === "custom" || s === "youtube" || s === "ytlist") this.source = s;
     } catch {}
   }
 
@@ -286,7 +286,7 @@ class RaceAudio {
 
   // ---------- Müzik ----------
   startMusic() {
-    if (this.source === "youtube") return; // YouTube oynatıcısı kendisi çalar
+    if (this.source === "youtube" || this.source === "ytlist") return; // YouTube oynatıcısı kendisi çalar
     if (this.source === "custom" && this.custom) {
       this.custom.currentTime = 0;
       void this.custom.play().catch(() => {});
