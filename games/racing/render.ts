@@ -1,4 +1,4 @@
-import { CAR_TYPES, ITEM_INFO, LAPS, TEAM_COLOR, type Car } from "@/games/racing/engine";
+import { CAR_TYPES, ITEM_INFO, colorOf, race, type Car } from "@/games/racing/engine";
 import { WORLD_H, WORLD_W, type Track } from "@/games/racing/track";
 
 export const VIEW_W = 960;
@@ -33,7 +33,7 @@ export function drawMinimap(g: CanvasRenderingContext2D, t: Track, cars: Car[], 
   g.lineWidth = 5;
   g.stroke();
   for (const c of cars) {
-    g.fillStyle = TEAM_COLOR[c.team];
+    g.fillStyle = colorOf(c);
     g.beginPath();
     g.arc(x0 + c.x * sx, y0 + c.y * sy, c.id === meId ? 5 : 3.5, 0, Math.PI * 2);
     g.fill();
@@ -69,7 +69,7 @@ export function drawHud(g: CanvasRenderingContext2D, me: Car, rank: number, tota
   g.fillText("SÜRE", 230, 34);
   g.fillStyle = "#fff";
   g.font = "bold 22px sans-serif";
-  g.fillText(`${Math.min(Math.max(me.lap, 1), LAPS)}/${LAPS}`, 162, 64);
+  g.fillText(`${Math.min(Math.max(me.lap, 1), race.laps)}/${race.laps}`, 162, 64);
   g.font = "bold 16px monospace";
   g.fillText(fmtTime(raceMs), 230, 62);
 

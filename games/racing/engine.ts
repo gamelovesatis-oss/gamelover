@@ -1,12 +1,23 @@
 import { TRACK_W, dirAt, nearest, type Track } from "@/games/racing/track";
 
-export const LAPS = 4;
+/** Yarış ayarları — tur sayısı oda sahibi tarafından yarış başında belirlenir. */
+export type Mode = "herkes" | "takim";
+export const race: { laps: number; mode: Mode } = { laps: 4, mode: "herkes" };
+export const LAP_OPTIONS = [1, 2, 3, 4, 5, 6, 8, 10];
 export type Team = "kirmizi" | "mavi";
 export type CarType = "hiz" | "tank" | "avci";
 export type Item = "turbo" | "roket" | "yag" | "kalkan" | "simsek";
 
 export const TEAM_COLOR: Record<Team, string> = { kirmizi: "#f43f5e", mavi: "#38bdf8" };
 export const TEAM_NAME: Record<Team, string> = { kirmizi: "Kırmızı", mavi: "Mavi" };
+/** Herkes Tek modunda her araca ayrı renk. */
+export const FFA_COLORS = ["#f43f5e", "#38bdf8", "#a3e635", "#fbbf24", "#c084fc", "#fb923c", "#2dd4bf", "#f472b6"];
+export const MODE_NAME: Record<Mode, string> = { herkes: "Herkes Tek", takim: "Takım" };
+
+/** a ile b rakip mi? Herkes Tek modunda herkes herkese rakiptir. */
+export const isRival = (a: { id: string; team: Team }, b: { id: string; team: Team }) =>
+  a.id !== b.id && (race.mode === "herkes" || a.team !== b.team);
+export const colorOf = (c: { team: Team; color?: string }) => c.color ?? TEAM_COLOR[c.team];
 
 export const CAR_TYPES: Record<CarType, { name: string; ability: string; desc: string; max: number; acc: number; turn: number; grip: number; cd: number }> = {
   hiz: { name: "Yıldırım", ability: "Nitro", desc: "En hızlı araç. Yeteneği: anlık nitro.", max: 9.6, acc: 0.21, turn: 0.052, grip: 0.9, cd: 7000 },
@@ -26,6 +37,7 @@ export type Car = {
   id: string;
   name: string;
   team: Team;
+  color?: string; // Herkes Tek modunda araca özel renk
   type: CarType;
   bot: boolean;
   skill: number; // botlar için 0.85–0.98
@@ -45,13 +57,15 @@ export type Car = {
   slowUntil: number;
   abilityAt: number; // yeteneğin tekrar hazır olacağı zaman
   finishMs: number | null;
+  quitAt: number | null; // "Yarışı Bitir"e basış zamanı
   botUseAt: number;
   drift: number;
 };
 
 export type Missile = { id: string; owner: string; team: Team; x: number; y: number; a: number; target: string | null; until: number };
-export type Oil = { id: string; team: Team; x: number; y: number; until: number };
-export type Input = { up: boolean; down: boolean; left: boolean; right: boolean };
+export type Oil = { id: string; owner: string; team: Team; x: number; y: number; until: number };
+/** steer: -1..1 analog yön (telefonu eğerek sürüş); verilirse left/right yerine kullanılır. */
+export type Input = { up: boolean; down: boolean; left: boolean; right: boolean; steer?: number };
 
 export const uid = () => Math.random().toString(36).slice(2, 10);
 
@@ -75,6 +89,7 @@ export function makeCar(p: { id: string; name: string; team: Team; type: CarType
     slowUntil: 0,
     abilityAt: 0,
     finishMs: null,
+    quitAt: null,
     botUseAt: 0,
     drift: 0,
   };
@@ -85,6 +100,11 @@ export const progress = (t: Track, c: Car) => c.lap * t.total + t.cum[c.idx];
 
 export function ranking(t: Track, cars: Car[]) {
   return [...cars].sort((a, b) => {
+    if (a.quitAt != null || b.quitAt != null) {
+      if (a.quitAt == null) return -1;
+      if (b.quitAt == null) return 1;
+      return b.quitAt - a.quitAt; // sonra bitiren, önce bitirenin önünde
+    }
     if (a.finishMs != null && b.finishMs != null) return a.finishMs - b.finishMs;
     if (a.finishMs != null) return -1;
     if (b.finishMs != null) return 1;
@@ -108,7 +128,7 @@ export function stepCar(t: Track, c: Car, inp: Input, now: number, dt: number, r
     fwd *= Math.pow(0.93, dt);
     lat *= Math.pow(0.9, dt);
   } else {
-    const steer = (inp.left ? -1 : 0) + (inp.right ? 1 : 0);
+    const steer = inp.steer ?? (inp.left ? -1 : 0) + (inp.right ? 1 : 0);
     c.a += steer * spec.turn * dt * Math.min(1, Math.abs(fwd) / 2.5) * Math.sign(fwd || 1);
     let max = spec.max * c.skill;
     if (now < c.boostUntil) max *= 1.5;
@@ -119,7 +139,7 @@ export function stepCar(t: Track, c: Car, inp: Input, now: number, dt: number, r
     else fwd *= Math.pow(0.985, dt);
     if (fwd > max) fwd = Math.max(max, fwd - 0.25 * dt); // turbo bitince yavaşça düş
     fwd = Math.max(-3, fwd);
-    lat *= Math.pow(spec.grip - (Math.abs(steer) && Math.abs(fwd) > 6 ? 0.06 : 0), dt);
+    lat *= Math.pow(spec.grip - (Math.abs(steer) > 0.4 && Math.abs(fwd) > 6 ? 0.06 : 0), dt);
   }
   c.drift = Math.abs(lat);
   const nfx = Math.cos(c.a),
@@ -157,7 +177,7 @@ function updateLap(t: Track, c: Car, idx: number, raceMs: number) {
   if (prev > n * 0.8 && idx < n * 0.2 && c.passedHalf) {
     c.lap++;
     c.passedHalf = false;
-    if (c.lap > LAPS && c.finishMs == null) c.finishMs = raceMs;
+    if (c.lap > race.laps && c.finishMs == null && c.quitAt == null) c.finishMs = raceMs;
   } else if (prev < n * 0.2 && idx > n * 0.8 && c.lap > 0 && c.finishMs == null) {
     c.lap--;
     c.passedHalf = true;
@@ -205,7 +225,7 @@ export function findTarget(t: Track, c: Car, cars: Car[]) {
   let best: Car | null = null,
     bd = Infinity;
   for (const o of cars) {
-    if (o.team === c.team || o.finishMs != null) continue;
+    if (!isRival(c, o) || o.finishMs != null) continue;
     let d = progress(t, o) - me;
     if (d < -200) continue;
     if (d < 0) d = 50;
@@ -216,7 +236,7 @@ export function findTarget(t: Track, c: Car, cars: Car[]) {
   }
   if (!best) {
     for (const o of cars) {
-      if (o.team === c.team) continue;
+      if (!isRival(c, o)) continue;
       const d = Math.hypot(o.x - c.x, o.y - c.y);
       if (d < bd) {
         bd = d;

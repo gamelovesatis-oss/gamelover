@@ -5,7 +5,8 @@ import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
-import { TEAM_COLOR, type Car, type CarType, type Missile, type Oil } from "@/games/racing/engine";
+import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
+import { colorOf, type Car, type CarType, type Missile, type Oil } from "@/games/racing/engine";
 import type { Particle } from "@/games/racing/render";
 import { TRACK_W, WORLD_H, WORLD_W, dirAt, nearest, type Track } from "@/games/racing/track";
 
@@ -152,7 +153,7 @@ function labelSprite(text: string, color: string, bold: boolean) {
 // ---------- Araç modeli ----------
 type CarMesh = { group: THREE.Group; body: THREE.Group; shield: THREE.Mesh; flames: THREE.Group; glow: THREE.Mesh; wheels: THREE.Mesh[] };
 
-function buildCar(type: CarType, color: string, name: string, isMe: boolean): CarMesh {
+function buildCar(type: CarType, color: string, name: string, isMe: boolean, hq: boolean): CarMesh {
   const group = new THREE.Group();
   const body = new THREE.Group();
   group.add(body);
@@ -166,10 +167,12 @@ function buildCar(type: CarType, color: string, name: string, isMe: boolean): Ca
   chassis.position.y = 4 + dims.h / 2;
   body.add(chassis);
 
-  // Yan şerit
-  const stripe = new THREE.Mesh(new THREE.BoxGeometry(dims.l * 0.9, 1.6, dims.w + 0.4), white);
-  stripe.position.y = 4 + dims.h * 0.55;
-  body.add(stripe);
+  // Yan şerit (telefonda atlanır)
+  if (hq) {
+    const stripe = new THREE.Mesh(new THREE.BoxGeometry(dims.l * 0.9, 1.6, dims.w + 0.4), white);
+    stripe.position.y = 4 + dims.h * 0.55;
+    body.add(stripe);
+  }
 
   if (type === "avci") {
     // Kama burun
@@ -189,7 +192,7 @@ function buildCar(type: CarType, color: string, name: string, isMe: boolean): Ca
   const wing = new THREE.Mesh(new THREE.BoxGeometry(5, 1.5, dims.w + 4), paint);
   wing.position.set(-dims.l / 2 + 2, 4 + dims.h + 7, 0);
   body.add(wing);
-  for (const z of [-dims.w / 2 + 3, dims.w / 2 - 3]) {
+  for (const z of hq ? [-dims.w / 2 + 3, dims.w / 2 - 3] : []) {
     const post = new THREE.Mesh(new THREE.BoxGeometry(2, 7, 1.5), black);
     post.position.set(-dims.l / 2 + 2, 4 + dims.h + 3, z);
     body.add(post);
@@ -199,9 +202,11 @@ function buildCar(type: CarType, color: string, name: string, isMe: boolean): Ca
   const headMat = new THREE.MeshBasicMaterial({ color: "#e0f2fe" });
   const tailMat = new THREE.MeshBasicMaterial({ color: "#ff2d55" });
   for (const z of [-dims.w / 2 + 4, dims.w / 2 - 4]) {
-    const hl = new THREE.Mesh(new THREE.BoxGeometry(1, 2.5, 4), headMat);
-    hl.position.set(dims.l / 2 + (type === "avci" ? 0.5 : 0.5), 4 + dims.h * 0.6, z);
-    body.add(hl);
+    if (hq) {
+      const hl = new THREE.Mesh(new THREE.BoxGeometry(1, 2.5, 4), headMat);
+      hl.position.set(dims.l / 2 + 0.5, 4 + dims.h * 0.6, z);
+      body.add(hl);
+    }
     const tl = new THREE.Mesh(new THREE.BoxGeometry(1, 2.5, 5), tailMat);
     tl.position.set(-dims.l / 2 - 0.5, 4 + dims.h * 0.6, z);
     body.add(tl);
@@ -219,8 +224,7 @@ function buildCar(type: CarType, color: string, name: string, isMe: boolean): Ca
     const wheel = new THREE.Mesh(wheelGeo, black);
     wheel.rotation.x = Math.PI / 2;
     wheel.position.set(x, 5, z);
-    const rim = new THREE.Mesh(new THREE.CylinderGeometry(2.6, 2.6, 4.7, 8), new THREE.MeshBasicMaterial({ color }));
-    wheel.add(rim);
+    if (hq) wheel.add(new THREE.Mesh(new THREE.CylinderGeometry(2.6, 2.6, 4.7, 8), new THREE.MeshBasicMaterial({ color })));
     body.add(wheel);
     wheels.push(wheel);
   }
@@ -284,16 +288,18 @@ export class Scene3D {
     private track: Track,
     cars: Car[],
     private meId: string,
-    hq: boolean,
+    private hq: boolean,
   ) {
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: "high-performance" });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, hq ? 2 : 1.5));
+    // Telefonda: kenar yumuşatma kapalı, 1x çözünürlük, daha kısa görüş mesafesi.
+    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: hq, powerPreference: "high-performance" });
+    this.renderer.setPixelRatio(hq ? Math.min(window.devicePixelRatio || 1, 2) : 1);
+    this.camera.far = hq ? 6000 : 2600;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 0.9;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
 
     this.scene.background = new THREE.Color("#070619");
-    this.scene.fog = new THREE.Fog("#0a0820", 700, 2600);
+    this.scene.fog = new THREE.Fog("#0a0820", 700, hq ? 2600 : 1900);
     this.scene.add(new THREE.HemisphereLight("#a78bfa", "#05040b", 0.7));
     const sun = new THREE.DirectionalLight("#ffffff", 1.1);
     sun.position.set(900, 1400, 600);
@@ -302,7 +308,7 @@ export class Scene3D {
 
     this.buildWorld();
     for (const c of cars) {
-      const m = buildCar(c.type, TEAM_COLOR[c.team], c.name, c.id === meId);
+      const m = buildCar(c.type, colorOf(c), c.name, c.id === meId, hq);
       this.scene.add(m.group);
       this.cars.set(c.id, m);
     }
@@ -338,7 +344,10 @@ export class Scene3D {
     // Zemin
     const gt = gridTex();
     gt.repeat.set(60, 60);
-    const ground = new THREE.Mesh(new THREE.PlaneGeometry(9000, 9000), new THREE.MeshStandardMaterial({ map: gt, roughness: 0.95 }));
+    const ground = new THREE.Mesh(
+      new THREE.PlaneGeometry(9000, 9000),
+      this.hq ? new THREE.MeshStandardMaterial({ map: gt, roughness: 0.95 }) : new THREE.MeshLambertMaterial({ map: gt }),
+    );
     ground.rotation.x = -Math.PI / 2;
     ground.position.set(WORLD_W / 2, -0.5, WORLD_H / 2);
     this.scene.add(ground);
@@ -381,7 +390,9 @@ export class Scene3D {
     // Asfalt
     const road = new THREE.Mesh(
       strip(TRACK_W / 2, -TRACK_W / 2, 0.2, 0.2, undefined, true),
-      new THREE.MeshStandardMaterial({ map: asphaltTex(), roughness: 0.85, metalness: 0.1, side: THREE.DoubleSide }),
+      this.hq
+        ? new THREE.MeshStandardMaterial({ map: asphaltTex(), roughness: 0.85, metalness: 0.1, side: THREE.DoubleSide })
+        : new THREE.MeshLambertMaterial({ map: asphaltTex(), side: THREE.DoubleSide }),
     );
     this.scene.add(road);
 
@@ -447,11 +458,13 @@ export class Scene3D {
     banner.rotation.y = Math.atan2(nx, ny);
     this.scene.add(banner);
 
-    // Şehir silueti
+    // Şehir silueti — tüm binalar tek geometri/tek çizimde (telefonda akıcılık için)
     const wt = windowsTex();
-    const edgeCols = ["#22d3ee", "#f472b6", "#8b5cf6", "#fbbf24"];
-    let placed = 0;
-    for (let tries = 0; tries < 900 && placed < 85; tries++) {
+    const edgeCols = ["#22d3ee", "#f472b6", "#8b5cf6", "#fbbf24"].map((c) => new THREE.Color(c));
+    const boxGeos: THREE.BufferGeometry[] = [];
+    const edgeGeos: THREE.BufferGeometry[] = [];
+    const maxBuildings = this.hq ? 85 : 40;
+    for (let tries = 0; tries < 900 && boxGeos.length < maxBuildings; tries++) {
       const x = -700 + Math.random() * (WORLD_W + 1400);
       const z = -700 + Math.random() * (WORLD_H + 1400);
       const w = 60 + Math.random() * 110,
@@ -461,18 +474,29 @@ export class Scene3D {
       const geo = new THREE.BoxGeometry(w, h, d);
       const uv = geo.getAttribute("uv") as THREE.BufferAttribute;
       for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * (Math.max(w, d) / 40), uv.getY(i) * (h / 40));
-      const b = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: "#0d0b22", emissive: "#ffffff", emissiveMap: wt, emissiveIntensity: 0.85, roughness: 0.85 }));
-      b.position.set(x, h / 2, z);
-      this.scene.add(b);
-      const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geo), new THREE.LineBasicMaterial({ color: edgeCols[placed % edgeCols.length], transparent: true, opacity: 0.8 }));
-      edges.position.copy(b.position);
-      this.scene.add(edges);
-      placed++;
+      const edges = new THREE.EdgesGeometry(geo);
+      geo.translate(x, h / 2, z);
+      edges.translate(x, h / 2, z);
+      const ec = edgeCols[boxGeos.length % edgeCols.length];
+      const cols = new Float32Array(edges.getAttribute("position").count * 3);
+      for (let i = 0; i < cols.length; i += 3) cols.set([ec.r, ec.g, ec.b], i);
+      edges.setAttribute("color", new THREE.BufferAttribute(cols, 3));
+      boxGeos.push(geo);
+      edgeGeos.push(edges);
     }
+    const city = mergeGeometries(boxGeos);
+    const cityEdges = mergeGeometries(edgeGeos);
+    boxGeos.forEach((g) => g.dispose());
+    edgeGeos.forEach((g) => g.dispose());
+    const cityMat = this.hq
+      ? new THREE.MeshStandardMaterial({ color: "#0d0b22", emissive: "#ffffff", emissiveMap: wt, emissiveIntensity: 0.85, roughness: 0.85 })
+      : new THREE.MeshLambertMaterial({ color: "#0d0b22", emissive: "#ffffff", emissiveMap: wt, emissiveIntensity: 0.85 });
+    this.scene.add(new THREE.Mesh(city, cityMat));
+    this.scene.add(new THREE.LineSegments(cityEdges, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.8 })));
 
     // Yıldızlar
     const sp: number[] = [];
-    for (let i = 0; i < 900; i++) {
+    for (let i = 0; i < (this.hq ? 900 : 300); i++) {
       const th = Math.random() * Math.PI * 2,
         ph = Math.random() * Math.PI * 0.45;
       sp.push(WORLD_W / 2 + Math.cos(th) * Math.sin(ph) * 4000, Math.cos(ph) * 3000 + 300, WORLD_H / 2 + Math.sin(th) * Math.sin(ph) * 4000);
@@ -545,7 +569,7 @@ export class Scene3D {
       live.add(mi.id);
       let o = this.missiles.get(mi.id);
       if (!o) {
-        o = new THREE.Mesh(this.missileGeo, new THREE.MeshBasicMaterial({ color: TEAM_COLOR[mi.team] }));
+        o = new THREE.Mesh(this.missileGeo, new THREE.MeshBasicMaterial({ color: "#fbbf24" }));
         o.rotation.order = "YXZ";
         this.scene.add(o);
         this.missiles.set(mi.id, o);

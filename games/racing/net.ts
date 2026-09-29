@@ -3,9 +3,9 @@
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import { isSupabaseConfigured } from "@/lib/env";
 import { publicClient } from "@/lib/supabase/public";
-import type { CarType, Team } from "@/games/racing/engine";
+import type { CarType, Mode, Team } from "@/games/racing/engine";
 
-export type Player = { id: string; name: string; team: Team; type: CarType; joinedAt: number; ready?: boolean };
+export type Player = { id: string; name: string; team: Team; type: CarType; joinedAt: number; mode?: Mode; laps?: number };
 
 type Handler = (payload: any) => void; // eslint-disable-line @typescript-eslint/no-explicit-any
 

@@ -6,6 +6,8 @@ import { Copy, Crown, Gift, Loader2, Play, RotateCcw, Trophy } from "lucide-reac
 import { useCallback, useEffect, useState } from "react";
 import type { GameMeta } from "@/games/registry";
 import type { GameProps } from "@/games/hooks";
+import { raceAudio } from "@/games/racing/audio";
+import { enterFullscreenLandscape } from "@/games/racing/fullscreen";
 import type { Score } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -76,6 +78,11 @@ export function GameShell({
   );
 
   function start() {
+    // Yarış oyunu: "OYNA" dokunuşuyla telefonda tam ekran + yatay, ses kilidini aç
+    if (game.slug === "neon-yaris") {
+      raceAudio().unlock();
+      if (window.matchMedia("(pointer: coarse)").matches) enterFullscreenLandscape();
+    }
     setScore(0);
     setRun((r) => r + 1);
     setPhase("playing");
