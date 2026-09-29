@@ -43,6 +43,20 @@ export default async function GamePage({ params }: Props) {
 
       <GameShell game={game} rewardCode={settings.reward_code} rewardScore={settings.reward_score ?? 500} initialScores={scores} />
 
+      {game.slug === "neon-yaris" && (
+        <p className="mt-4 text-xs text-slate-500">
+          3B araç modeli:{" "}
+          <a href="https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/CarConcept" target="_blank" rel="noopener noreferrer" className="underline hover:text-slate-300">
+            Car Concept
+          </a>{" "}
+          — Eric Chadwick / Darmstadt Graphics Group (Unity Fan&apos;ın CC0 modelinden),{" "}
+          <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener noreferrer" className="underline hover:text-slate-300">
+            CC BY 4.0
+          </a>
+          . Oyun için sadeleştirildi ve yeniden renklendirildi.
+        </p>
+      )}
+
       <section className="mt-24">
         <h2 className="mb-8 font-display text-2xl font-bold text-white">Diğer oyunlar</h2>
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">

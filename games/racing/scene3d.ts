@@ -7,7 +7,8 @@ import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
-import { buildCarModel, type CarRig } from "@/games/racing/carModel";
+import { buildCarModel, plateTex, type CarRig } from "@/games/racing/carModel";
+import { animateRealWheels, loadRealCar, makeRealBody, type RealBody } from "@/games/racing/realCar";
 import { SkidMarks, TireSmoke } from "@/games/racing/effects";
 import { FlagStarter } from "@/games/racing/starter";
 import { buildCity } from "@/games/racing/cityWorld";
@@ -163,6 +164,8 @@ type CarView = CarRig & {
   roll: number;
   steer: number;
   bounce: number;
+  real?: RealBody; // gerçekçi model (yüklenince)
+  color: string;
 };
 
 export class Scene3D {
@@ -179,6 +182,7 @@ export class Scene3D {
   private pixelRatio = 1;
   private maxRatio = 1;
   private frameMs = 16;
+  private disposed = false;
   private lastSpin = 0;
   private frame = 0;
   private missiles = new Map<string, THREE.Object3D>();
@@ -236,7 +240,7 @@ export class Scene3D {
       label.position.y = 34;
       rig.group.add(label);
       this.scene.add(rig.group);
-      this.cars.set(c.id, { ...rig, label, prevFwd: 0, prevA: c.a, pitch: 0, roll: 0, steer: 0, bounce: 0 });
+      this.cars.set(c.id, { ...rig, label, prevFwd: 0, prevA: c.a, pitch: 0, roll: 0, steer: 0, bounce: 0, color: colorOf(c) });
     }
     this.smoke = new TireSmoke(hq ? 900 : 350);
     this.skids = new SkidMarks(hq ? 2400 : 900);
@@ -247,7 +251,7 @@ export class Scene3D {
       const rig = buildCarModel(tc.type, tc.color, { hq, beam: false, clearcoat: false });
       rig.glow.visible = false;
       this.scene.add(rig.group);
-      this.traffic.push({ car: tc, view: { ...rig, label: new THREE.Sprite(), prevFwd: 0, prevA: 0, pitch: 0, roll: 0, steer: 0, bounce: 0 } });
+      this.traffic.push({ car: tc, view: { ...rig, label: new THREE.Sprite(), prevFwd: 0, prevA: 0, pitch: 0, roll: 0, steer: 0, bounce: 0, color: tc.color } });
     }
 
     const pg = new THREE.BufferGeometry();
@@ -272,6 +276,19 @@ export class Scene3D {
     this.camLook.set(me.x, 10, me.y);
     this.camAngle = me.a;
     this.resize();
+    // Gerçekçi araç modelini arka planda yükle; hazır olunca araçlara giydir
+    loadRealCar()
+      .then((tpl) => {
+        if (this.disposed) return;
+        const plate = plateTex();
+        const views = [...this.cars.values(), ...this.traffic.map((x) => x.view)];
+        for (const v of views) {
+          v.real = makeRealBody(tpl, v.color, plate, this.hq);
+          v.body.add(v.real.root);
+          v.real.root.visible = false;
+        }
+      })
+      .catch((e) => console.warn("[3B model]", e));
   }
 
   /** Neon arena: ızgara zemin, neon pist, bordürler, bariyerler, silüet. */
@@ -460,6 +477,19 @@ export class Scene3D {
     }
   }
 
+  /** Yakındaki araçlar gerçekçi modelle, uzaktakiler hafif modelle çizilir. */
+  private applyLod(m: CarView, x: number, y: number, fwd: number, dt: number) {
+    const d = Math.hypot(x - this.camPos.x, y - this.camPos.z);
+    const near = !!m.real && d < (this.hq ? 1400 : 650);
+    m.shell.visible = !near;
+    if (m.real) m.real.root.visible = near;
+    if (near) animateRealWheels(m.real!, fwd, m.steer, dt);
+    else {
+      for (const p of m.frontPivots) p.rotation.y = m.steer;
+      for (const w of m.spinners) w.rotation.z -= (fwd / m.wheelR) * dt;
+    }
+  }
+
   resize() {
     const w = this.canvas.clientWidth || 960,
       h = this.canvas.clientHeight || 600;
@@ -526,12 +556,12 @@ export class Scene3D {
       // Ön tekerlekler direksiyonla döner, tüm tekerlekler hızla döner
       const steerT = spinning ? 0 : Math.max(-0.5, Math.min(0.5, -yawRate * 9));
       m.steer += (steerT - m.steer) * Math.min(1, 0.3 * dt);
-      for (const p of m.frontPivots) p.rotation.y = m.steer;
-      for (const w of m.spinners) w.rotation.z -= (fwd / m.wheelR) * dt;
+      this.applyLod(m, c.x, c.y, fwd, dt);
 
       // Fren lambası
       const braking = accel < -0.06 || (c.drift > 2 && fwd > 3);
       m.brakeMat.emissiveIntensity += ((braking ? 4 : 1) - m.brakeMat.emissiveIntensity) * 0.3;
+      if (m.real?.brake) m.real.brake.emissiveIntensity = m.brakeMat.emissiveIntensity * 1.5;
 
       m.shield.visible = now < c.shieldUntil;
       if (m.shield.visible) m.shield.scale.setScalar(1 + Math.sin(now / 90) * 0.04);
@@ -559,7 +589,7 @@ export class Scene3D {
       const p = trafficPose(this.track, car, s.sinceStartMs);
       view.group.position.set(p.x, 0, p.y);
       view.group.rotation.y = -p.a;
-      for (const w of view.spinners) w.rotation.z -= (p.speed / view.wheelR) * dt;
+      this.applyLod(view, p.x, p.y, p.speed, dt);
     }
 
     // Kutular
@@ -676,6 +706,7 @@ export class Scene3D {
   }
 
   dispose() {
+    this.disposed = true;
     this.scene.traverse((o) => {
       const m = o as THREE.Mesh;
       m.geometry?.dispose?.();

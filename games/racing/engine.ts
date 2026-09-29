@@ -60,6 +60,7 @@ export type Car = {
   quitAt: number | null; // "Yarışı Bitir"e basış zamanı
   botUseAt: number;
   drift: number;
+  assistW: number; // sürüş yardımının devreye girme oranı (0..1)
   // Drift modu
   driftScore: number; // kasaya giren puan
   combo: number; // devam eden drift'in ham puanı
@@ -100,6 +101,7 @@ export function makeCar(p: { id: string; name: string; team: Team; type: CarType
     quitAt: null,
     botUseAt: 0,
     drift: 0,
+    assistW: 0,
     driftScore: 0,
     combo: 0,
     comboTime: 0,
@@ -137,19 +139,30 @@ export function stepCar(t: Track, c: Car, inp: Input, now: number, dt: number, r
   const spinning = now < c.spinUntil;
   const oldSpeed = c.vx * Math.cos(c.a) + c.vy * Math.sin(c.a);
 
-  // Sürüş yardımı: ileriki yol noktasına doğru otomatik direksiyon; oyuncu ne kadar çok
-  // direksiyon verirse yardım o kadar azalır (sollama/dönüş serbest).
+  // Hafif sürüş yardımı:
+  //  - Oyuncu direksiyon verirken tamamen susar (çekişme/yalpalama olmaz).
+  //  - Direksiyon bırakılınca yavaşça devreye girer ve sadece burnu yolun yönüne hizalar.
+  //  - Yalnızca duvara çok yaklaşınca hafifçe içeri iter; yolun ortasına zorlamaz.
   let assistBrake = false;
   if (inp.assist && !spinning && oldSpeed > 2 && !driftMode) {
+    const playerSteering = Math.abs(steer) > 0.08;
+    c.assistW = playerSteering ? 0 : Math.min(1, c.assistW + 0.04 * dt);
     const n = t.pts.length;
-    const p = t.pts[(idx + Math.round(8 + oldSpeed * 1.5)) % n];
-    let diff = Math.atan2(p.y - c.y, p.x - c.x) - c.a;
+    const tan = dirAt(t, (idx + Math.round(4 + oldSpeed * 0.8)) % n);
+    let diff = Math.atan2(tan.dy, tan.dx) - c.a;
     while (diff > Math.PI) diff -= Math.PI * 2;
     while (diff < -Math.PI) diff += Math.PI * 2;
-    const auto = Math.max(-1, Math.min(1, diff * 2.6));
-    steer = Math.max(-1, Math.min(1, steer + auto * (1 - Math.min(1, Math.abs(steer))) * 0.9));
-    // Keskin viraj yaklaşıyorsa otomatik yavaşla
-    assistBrake = Math.abs(diff) > 0.42 && oldSpeed > 6.2;
+    // Kenara yakınsa içeri doğru küçük bir düzeltme
+    const p = t.pts[idx];
+    const side = (c.x - p.x) * -tan.dy + (c.y - p.y) * tan.dx; // + : yolun sağı
+    const edge = Math.max(0, Math.abs(side) - t.width * 0.32) / (t.width * 0.2);
+    diff -= Math.sign(side) * Math.min(0.35, edge * 0.35);
+    const auto = Math.max(-0.45, Math.min(0.45, diff * 1.1));
+    if (!playerSteering) steer = auto * c.assistW;
+    // Keskin viraj yaklaşıyorsa hafifçe yavaşla
+    const far = dirAt(t, (idx + Math.round(6 + oldSpeed * 4)) % n);
+    const dot = tan.dx * far.dx + tan.dy * far.dy;
+    assistBrake = dot < 0.55 && oldSpeed > 6.5 + dot * 3;
   }
 
   // 1) Önce yön değişir; hız dünyada sabit kalır → yeni yöne göre yana kayma oluşur.
@@ -179,7 +192,7 @@ export function stepCar(t: Track, c: Car, inp: Input, now: number, dt: number, r
     fwd = Math.max(-3, fwd);
     // 2) Lastik tutuşu yana kaymayı söndürür (drift modunda daha az)
     let grip = spec.grip - (Math.abs(steer) > 0.4 && Math.abs(fwd) > 6 ? 0.04 : 0);
-    if (inp.assist) grip += 0.04; // yardımda araç daha az kayar
+    if (inp.assist) grip += 0.025; // yardımda araç biraz daha az kayar
     if (driftMode) grip = handbrake ? 0.965 : grip + 0.02;
     lat *= Math.pow(Math.min(0.98, grip), dt);
   }

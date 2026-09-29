@@ -11,6 +11,7 @@ import type { CarType } from "@/games/racing/engine";
 export type CarRig = {
   group: THREE.Group; // dünya konumu ve yön
   body: THREE.Group; // süspansiyon: yunuslama / yatma / zıplama
+  shell: THREE.Group; // basit (kodla çizilen) gövde — uzaktayken görünür
   frontPivots: THREE.Group[]; // direksiyonla dönen ön tekerlekler
   spinners: THREE.Group[]; // dönen tekerlekler
   brakeMat: THREE.MeshStandardMaterial;
@@ -79,7 +80,7 @@ const SPECS: Record<CarType, Spec> = {
 };
 
 let plateCache: THREE.Texture | null = null;
-function plateTex() {
+export function plateTex() {
   if (plateCache) return plateCache;
   const c = document.createElement("canvas");
   c.width = 256;
@@ -160,6 +161,8 @@ export function buildCarModel(type: CarType, color: string, opts: { hq: boolean;
   const group = new THREE.Group();
   const body = new THREE.Group();
   group.add(body);
+  const shell = new THREE.Group();
+  body.add(shell);
 
   // ---------- Malzemeler ----------
   const paint = (opts.clearcoat ?? hq)
@@ -213,7 +216,7 @@ export function buildCarModel(type: CarType, color: string, opts: { hq: boolean;
   darkGeos.push(prep(box(4.5, 0.8, s.W + 0.6), s.L / 2 - 1.2, 3, 0));
   darkGeos.push(prep(box(3.2, 1.8, s.W * 0.78), -s.L / 2 + 0.8, 3.6, 0));
   darkGeos.push(prep(box(s.axle * 1.35, 1.3, s.W + 0.8), 0, 3.6, 0));
-  body.add(merged(paintGeos, paint), merged(darkGeos, dark));
+  shell.add(merged(paintGeos, paint), merged(darkGeos, dark));
 
   // Plakalar (Çorum: 19)
   if (hq) {
@@ -223,15 +226,15 @@ export function buildCarModel(type: CarType, color: string, opts: { hq: boolean;
     const rear = new THREE.Mesh(box(0.3, 2.2, 7.5), plateMat);
     rear.position.set(-s.L / 2 - 0.5, s.tail - 3, 0);
     rear.rotation.y = Math.PI;
-    body.add(front, rear);
+    shell.add(front, rear);
   }
 
   // Cam (kabin)
-  body.add(new THREE.Mesh(prep(extrude(s.cabin, s.W - 4.6, 1.2, hq ? 3 : 1)), glass));
+  shell.add(new THREE.Mesh(prep(extrude(s.cabin, s.W - 4.6, 1.2, hq ? 3 : 1)), glass));
 
   // Egzoz
   const exGeos = [-1, 1].map((side) => prep(new THREE.CylinderGeometry(1.05, 1.05, 3.2, hq ? 12 : 6), -s.L / 2 - 0.6, 4.4, side * s.W * 0.22, 0, Math.PI / 2));
-  body.add(merged(exGeos, chrome));
+  shell.add(merged(exGeos, chrome));
 
   // Farlar ve stoplar
   const hGeos: THREE.BufferGeometry[] = [];
@@ -241,13 +244,13 @@ export function buildCarModel(type: CarType, color: string, opts: { hq: boolean;
     tGeos.push(prep(box(1, 1.4, 5.2), -s.L / 2 - 0.35, s.tail, side * (s.W / 2 - 3.6)));
   }
   tGeos.push(prep(box(0.8, 0.5, s.W - 13), -s.L / 2 - 0.3, s.tail + 0.2, 0)); // ortadaki ince şerit
-  body.add(merged(hGeos, headMat), merged(tGeos, brakeMat));
+  shell.add(merged(hGeos, headMat), merged(tGeos, brakeMat));
   if (hq)
     for (const side of [-1, 1]) {
       const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: radialTex(), color: "#dbeafe", blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
       sp.scale.set(9, 9, 1);
       sp.position.set(s.head[0] + 1.2, s.head[1], side * (s.W / 2 - 3.6));
-      body.add(sp);
+      shell.add(sp);
     }
 
   // ---------- Tekerlekler ----------
@@ -285,7 +288,7 @@ export function buildCarModel(type: CarType, color: string, opts: { hq: boolean;
         cal.position.set(-s.r * 0.35, s.r * 0.25, side * (tw / 2 - 1.2));
         pivot.add(cal);
       }
-      body.add(pivot);
+      shell.add(pivot);
       spinners.push(spin);
       if (front) frontPivots.push(pivot);
     }
@@ -342,5 +345,5 @@ export function buildCarModel(type: CarType, color: string, opts: { hq: boolean;
   shield.visible = false;
   group.add(shield);
 
-  return { group, body, frontPivots, spinners, brakeMat, flames, shield, glow, beam, rearAxle: -s.axle, halfTrack, wheelR: s.r };
+  return { group, body, shell, frontPivots, spinners, brakeMat, flames, shield, glow, beam, rearAxle: -s.axle, halfTrack, wheelR: s.r };
 }
