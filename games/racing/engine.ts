@@ -144,6 +144,18 @@ export function stepCar(t: Track, c: Car, inp: Input, now: number, dt: number, r
   //  - Direksiyon bırakılınca yavaşça devreye girer ve sadece burnu yolun yönüne hizalar.
   //  - Yalnızca duvara çok yaklaşınca hafifçe içeri iter; yolun ortasına zorlamaz.
   let assistBrake = false;
+  if (inp.assist && !spinning && driftMode && Math.abs(steer) < 0.08 && Math.hypot(c.vx, c.vy) > 2) {
+    // Drift modu denge yardımı: direksiyon bırakılınca burnu gidiş yönüne ve yola çevirerek toparlar
+    const n = t.pts.length;
+    const tan = dirAt(t, (idx + 6) % n);
+    let dv = Math.atan2(c.vy, c.vx) - c.a;
+    let dt2 = Math.atan2(tan.dy, tan.dx) - c.a;
+    while (dv > Math.PI) dv -= Math.PI * 2;
+    while (dv < -Math.PI) dv += Math.PI * 2;
+    while (dt2 > Math.PI) dt2 -= Math.PI * 2;
+    while (dt2 < -Math.PI) dt2 += Math.PI * 2;
+    if (Math.abs(dv) < 1.6) steer = Math.max(-0.5, Math.min(0.5, dv * 0.9 + dt2 * 0.5));
+  }
   if (inp.assist && !spinning && oldSpeed > 2 && !driftMode) {
     const playerSteering = Math.abs(steer) > 0.08;
     c.assistW = playerSteering ? 0 : Math.min(1, c.assistW + 0.04 * dt);
@@ -168,7 +180,13 @@ export function stepCar(t: Track, c: Car, inp: Input, now: number, dt: number, r
   // 1) Önce yön değişir; hız dünyada sabit kalır → yeni yöne göre yana kayma oluşur.
   const oldFwd = c.vx * Math.cos(c.a) + c.vy * Math.sin(c.a);
   if (spinning) c.a += 0.28 * dt;
-  else c.a += steer * spec.turn * dt * Math.min(1, Math.abs(oldFwd) / 2.5) * Math.sign(oldFwd || 1);
+  else {
+    // Gerçek araçlar gibi: düşük hızda dönüş yavaş (minimum dönüş yarıçapı), yana kayarken dönüş sönümlenir.
+    // Böylece tam direksiyonda yerinde fırıl fırıl dönmez.
+    const speedK = Math.min(1, Math.abs(oldFwd) / 6);
+    const slideK = 1 - Math.min(0.55, c.drift / 9);
+    c.a += steer * spec.turn * dt * speedK * slideK * Math.sign(oldFwd || 1);
+  }
   const fx = Math.cos(c.a),
     fy = Math.sin(c.a);
   let fwd = c.vx * fx + c.vy * fy;
